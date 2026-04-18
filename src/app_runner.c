@@ -123,8 +123,7 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_co
     char single_device[MAX_DEVICE_PATH_LEN];
     config_get_string(&cfg_mgr, "bluetooth", "device",
                       DEFAULT_SERIAL_DEVICE, single_device, sizeof(single_device));
-    snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s",
-             single_device[0] ? single_device : DEFAULT_SERIAL_DEVICE);
+    snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", single_device);
     *out_count = 1;
 
     config_destroy(&cfg_mgr);
