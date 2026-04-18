@@ -21,7 +21,7 @@
 #ifdef USE_CYCLONE_DDS
 #include <dds/dds.h>
 #define DDS_ENABLED 1
-#include "GatewayData.h"  // IDL生成的数据类型
+#include "GatewayData.h"  // 接口描述语言生成的数据类型
 #define MAX_DATA_LEN 4096
 #else
 #define DDS_ENABLED 0
@@ -35,7 +35,7 @@
 typedef struct DdsTopicInfo {
     char name[128];           // 话题名称
     char type_name[64];       // 数据类型名称
-    DdsQosPolicy qos;         // QoS策略
+    DdsQosPolicy qos;         // 服务质量策略
 #ifdef USE_CYCLONE_DDS
     dds_entity_t topic;       // 话题实体
     dds_entity_t writer;      // 写入器实体

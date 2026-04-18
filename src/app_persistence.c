@@ -28,7 +28,7 @@ static const char *SQL_CREATE_TABLE =
     "topic TEXT NOT NULL,"                       // 消息主题
     "payload BLOB NOT NULL,"                     // 消息内容（二进制）
     "payload_len INTEGER NOT NULL,"              // 消息长度
-    "qos INTEGER DEFAULT 0,"                     // QoS级别
+    "qos INTEGER DEFAULT 0,"                     // 服务质量级别
     "status INTEGER DEFAULT 0,"                  // 消息状态
     "retry_count INTEGER DEFAULT 0,"             // 重试次数
     "create_time INTEGER NOT NULL,"              // 创建时间
@@ -255,7 +255,7 @@ int persistence_save(PersistenceManager *manager, const char *topic,
     sqlite3_bind_text(stmt, 1, topic, -1, SQLITE_STATIC);           // 主题
     sqlite3_bind_blob(stmt, 2, payload, len, SQLITE_TRANSIENT);     // 内容
     sqlite3_bind_int(stmt, 3, len);                                  // 长度
-    sqlite3_bind_int(stmt, 4, qos);                                  // QoS
+    sqlite3_bind_int(stmt, 4, qos);                                  // 服务质量
     sqlite3_bind_int64(stmt, 5, now);                                // 创建时间
     sqlite3_bind_int64(stmt, 6, now);                                // 更新时间
     

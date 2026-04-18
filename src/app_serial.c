@@ -136,7 +136,7 @@ int app_serial_setBlockMode(SerialDevice *serial_device, int block_mode)
     }
     else
     {
-        // VTIME unit is 0.1 seconds, so VTIME=5 means 0.5 seconds
+        // VTIME单位为0.1秒，因此VTIME=5表示0.5秒
         options.c_cc[VTIME] = 5;
         options.c_cc[VMIN] = 0;
     }

@@ -9,7 +9,7 @@ typedef struct BufferStruct
     int size;             // 缓存区总长度
     int start;            // 数据起始offset
     int len;              // 数据长度
-    pthread_mutex_t lock; // Buffer锁
+    pthread_mutex_t lock; // 缓冲区锁
 } Buffer;
 
 /**

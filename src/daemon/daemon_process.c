@@ -48,9 +48,9 @@ int daemon_process_init(SubProcess *subprocess, const char *name)
     subprocess->pid = -1;
 
     // 构造子进程启动参数：
-    // args[0] = 可执行程序名（全局宏PROGRAM_NAME）
-    // args[1] = 子进程名称（如"app"）
-    // args[2] = NULL，符合execve函数参数格式要求
+    // 参数数组第0项为可执行程序名（全局宏PROGRAM_NAME）
+    // 参数数组第1项为子进程名称（如"app"）
+    // 参数数组第2项为NULL，符合execve函数参数格式要求
     subprocess->args[0] = PROGRAM_NAME;
     subprocess->args[1] = subprocess->name;
     subprocess->args[2] = NULL;
@@ -70,7 +70,7 @@ int daemon_process_start(SubProcess *subprocess)
     
     // 记录启动子进程的日志
     log_info("Starting subprocess %s", subprocess->name);
-    // fork创建子进程：父进程返回子进程PID，子进程返回0，失败返回-1
+    // 创建子进程：父进程返回子进程PID，子进程返回0，失败返回-1
     subprocess->pid = fork();
     if (subprocess->pid < 0)
     {

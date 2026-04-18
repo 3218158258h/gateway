@@ -29,7 +29,7 @@
  * 存储MQTT客户端的内部状态和资源。
  */
 typedef struct {
-    MQTTClient mqtt_client;         // Paho MQTT客户端句柄
+    MQTTClient mqtt_client;         // MQTT客户端句柄
     pthread_t thread;               // 后台线程
     int running;                    // 运行标志
     pthread_mutex_t lock;           // 状态锁
@@ -580,7 +580,7 @@ int mqtt_publish(MqttClient *client, const char *topic,
     int rc = MQTTClient_publishMessage(internal->mqtt_client, topic, &pubmsg, &token);
     
     if (rc == MQTTCLIENT_SUCCESS) {
-        // QoS > 0时等待交付完成
+        // 服务质量等级大于0时等待交付完成
         if (qos > MQTT_QOS_0) {
             MQTTClient_waitForCompletion(internal->mqtt_client, token, 5000);
         }

@@ -161,7 +161,7 @@ int app_message_initByBinary(Message *message, void *binary, int len)
     
     // 解析头部字段
     memcpy(&message->connection_type, binary, 1);       // 连接类型
-    memcpy(&message->id_len, binary + 1, 1);            // ID长度
+    memcpy(&message->id_len, binary + 1, 1);            // 设备标识长度
     memcpy(&message->data_len, binary + 2, 1);          // 数据长度
 
     // 验证消息长度
@@ -317,7 +317,7 @@ int app_message_saveBinary(Message *message, void *binary, int len)
 
     // 写入头部字段
     memcpy(binary, &message->connection_type, 1);       // 连接类型
-    memcpy(binary + 1, &message->id_len, 1);            // ID长度
+    memcpy(binary + 1, &message->id_len, 1);            // 设备标识长度
     memcpy(binary + 2, &message->data_len, 1);          // 数据长度
     
     // 写入payload数据

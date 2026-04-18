@@ -115,7 +115,7 @@ static void app_device_defaultRecvTask(void *argv)
     }
     
     // 解析消息头
-    int id_len = buf[1];      // ID长度
+    int id_len = buf[1];      // 设备标识长度
     int data_len = buf[2];    // 数据长度
     int total_len = id_len + data_len;
     
@@ -164,7 +164,7 @@ static void app_device_defaultSendTask(void *argv)
         return;
     }
     
-    // Peek header first without consuming it to avoid partial-frame corruption
+    // 先窥探头部，避免在数据不完整时破坏帧边界
     int peek_len = app_buffer_peek(device->send_buffer, buf, 3);
     if (peek_len != 3) {
         if (peek_len < 0) {
@@ -181,8 +181,7 @@ static void app_device_defaultSendTask(void *argv)
     int total_len = id_len + data_len;
     if (total_len < 0 || total_len > ((int)sizeof(buf) - 3)) {
         log_error("Invalid send frame length: id_len=%d, data_len=%d", id_len, data_len);
-        unsigned char drop_header[3];
-        app_buffer_read(device->send_buffer, drop_header, 3);
+        app_buffer_read(device->send_buffer, buf, 3);
         return;
     }
     
@@ -192,26 +191,10 @@ static void app_device_defaultSendTask(void *argv)
         return;
     }
 
-    // 防止消息长度异常导致栈缓冲区溢出
-    if (3 + total_len > (int)sizeof(buf)) {
-        log_error("Send frame too large: %d", 3 + total_len);
-        // Drop the whole invalid frame to avoid blocking or polluting next frames
-        unsigned char drop_buf[256];
-        app_buffer_read(device->send_buffer, buf, 3);  // discard header
-        int remaining = total_len;
-        while (remaining > 0) {
-            int chunk = remaining > (int)sizeof(drop_buf) ? (int)sizeof(drop_buf) : remaining;
-            int dropped = app_buffer_read(device->send_buffer, drop_buf, chunk);
-            if (dropped <= 0) break;
-            remaining -= dropped;
-        }
-        return;
-    }
-
-    // Read full message (header + payload)
+    // 读取完整消息（头部 + 负载）
     app_buffer_read(device->send_buffer, buf, 3);
     
-    // Read remaining payload (ID + data)
+    // 读取剩余负载（ID + 数据）
     app_buffer_read(device->send_buffer, buf + 3, total_len);
     buf_len = 3 + total_len;
 

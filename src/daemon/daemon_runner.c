@@ -88,7 +88,7 @@ int daemon_runner_run()
         // 非阻塞等待任意子进程退出（WNOHANG：无退出进程则立即返回0）
         pid_t pid = waitpid(-1, &status, WNOHANG);
         
-        // waitpid调用失败
+        // 子进程回收调用失败
         if (pid < 0)
         {
             // 被信号中断则跳过本次循环，继续监控
@@ -115,7 +115,7 @@ int daemon_runner_run()
         }
         
         // 检查子进程退出状态
-        // WIFEXITED：判断是否正常退出；WEXITSTATUS：获取正常退出的返回码
+        // 判断是否正常退出并获取退出返回码
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
             log_info("Process %d exited normally", pid);  // 记录正常退出日志
             // 正常退出不计入崩溃计数

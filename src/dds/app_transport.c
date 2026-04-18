@@ -276,7 +276,7 @@ int transport_init_from_config(TransportManager *manager, const char *config_fil
     }
     tconfig.type = transport_string_to_type(type_str);
     
-    // MQTT配置
+    // MQTT通信配置
     if (config_get_string(&config, "mqtt", "server", NULL,
                      tconfig.mqtt_broker, sizeof(tconfig.mqtt_broker)) != 0 ||
         tconfig.mqtt_broker[0] == '\0') {
@@ -298,7 +298,7 @@ int transport_init_from_config(TransportManager *manager, const char *config_fil
         return -1;
     }
     
-    // DDS配置
+    // DDS通信配置
     tconfig.dds_domain_id = config_get_int(&config, "dds", "domain_id", -1);
     if (tconfig.dds_domain_id < 0) {
         log_error("Invalid required config: [dds].domain_id=%d", tconfig.dds_domain_id);
@@ -315,7 +315,7 @@ int transport_init_from_config(TransportManager *manager, const char *config_fil
     
     // ========== 话题配置 ==========
     
-    // MQTT话题
+    // MQTT主题配置
     if (config_get_string(&config, "mqtt", "publish_topic", NULL,
                      tconfig.publish_topic, sizeof(tconfig.publish_topic)) != 0 ||
         tconfig.publish_topic[0] == '\0') {
@@ -331,7 +331,7 @@ int transport_init_from_config(TransportManager *manager, const char *config_fil
         return -1;
     }
     
-    // DDS话题
+    // DDS主题配置
     if (config_get_string(&config, "dds", "publish_topic", NULL,
                      tconfig.dds_publish_topic, sizeof(tconfig.dds_publish_topic)) != 0 ||
         tconfig.dds_publish_topic[0] == '\0') {
@@ -361,7 +361,7 @@ int transport_init_from_config(TransportManager *manager, const char *config_fil
         return -1;
     }
     
-    // QoS配置
+    // 服务质量配置
     tconfig.default_qos = config_get_int(&config, "transport", "default_qos", -1);
     if (tconfig.default_qos < 0) {
         log_error("Invalid required config: [transport].default_qos=%d", tconfig.default_qos);
@@ -658,7 +658,7 @@ int transport_subscribe_default(TransportManager *manager)
                                   topic, manager->config.default_qos);
         }
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
-        // DDS订阅默认话题
+        // DDS订阅默认主题
         return dds_subscribe_default((DdsManager *)manager->dds_manager);
     }
     
@@ -688,7 +688,7 @@ int transport_publish_default(TransportManager *manager,
         return mqtt_publish((MqttClient *)manager->mqtt_client, topic, 
                            data, len, manager->config.default_qos);
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
-        // DDS发布到默认话题
+        // DDS发布到默认主题
         return dds_publish_default((DdsManager *)manager->dds_manager, data, len);
     }
     
