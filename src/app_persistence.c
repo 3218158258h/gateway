@@ -19,6 +19,8 @@
 #include <sys/stat.h>
 #include <sqlite3.h>
 
+#define PERSISTENCE_MAX_PATH_LEN 256
+
 /* 数据库建表SQL语句 */
 static const char *SQL_CREATE_TABLE = 
     "CREATE TABLE IF NOT EXISTS messages ("
@@ -46,7 +48,7 @@ static int ensure_dir_exists(const char *dir_path)
         return -1;
     }
 
-    char path[256];
+    char path[PERSISTENCE_MAX_PATH_LEN];
     strncpy(path, dir_path, sizeof(path) - 1);
     path[sizeof(path) - 1] = '\0';
 
@@ -85,11 +87,11 @@ static int ensure_db_parent_dir(const char *db_path)
     }
 
     size_t len = (size_t)(slash - db_path);
-    if (len >= 256) {
+    if (len >= PERSISTENCE_MAX_PATH_LEN) {
         return -1;
     }
 
-    char dir_path[256];
+    char dir_path[PERSISTENCE_MAX_PATH_LEN];
     memcpy(dir_path, db_path, len);
     dir_path[len] = '\0';
 
