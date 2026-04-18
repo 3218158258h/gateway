@@ -68,7 +68,7 @@ typedef enum {
 typedef struct DdsManager {
     DdsConfig config;
     DdsState state;
-    void *participant;          /* DomainParticipant */
+    void *participant;          /* 域参与者对象 */
     void *publisher;
     void *subscriber;
     int is_initialized;

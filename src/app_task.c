@@ -38,13 +38,12 @@ typedef struct TaskQueue
 {
     struct TaskStruct *head;      // 队列头指针
     struct TaskStruct *tail;      // 队列尾指针
-    int count;                    // 队列中任务数量
 } TaskQueue;
 
 /* 全局静态变量 */
 static pthread_t *executor_ptr = NULL;      // 工作线程数组
 static int executors_count = 0;             // 工作线程数量
-static TaskQueue task_queue = {NULL, NULL, 0};  // 任务队列
+static TaskQueue task_queue = {NULL, NULL};     // 任务队列
 static pthread_mutex_t queue_lock;          // 队列互斥锁
 static pthread_cond_t queue_cond;           // 队列条件变量
 static int is_initialized = 0;              // 初始化标志
@@ -58,7 +57,6 @@ static void task_queue_init(TaskQueue *queue)
 {
     queue->head = NULL;
     queue->tail = NULL;
-    queue->count = 0;
 }
 
 /**
@@ -84,7 +82,6 @@ static int task_queue_push(TaskQueue *queue, struct TaskStruct *task)
         queue->tail = task;
     }
     
-    queue->count++;
     return 0;
 }
 
@@ -106,7 +103,6 @@ static struct TaskStruct* task_queue_pop(TaskQueue *queue)
         queue->tail = NULL;
     }
     
-    queue->count--;
     return task;
 }
 
@@ -139,7 +135,6 @@ static void task_queue_clear(TaskQueue *queue)
     
     queue->head = NULL;
     queue->tail = NULL;
-    queue->count = 0;
 }
 
 /**
