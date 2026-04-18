@@ -49,8 +49,7 @@ static int ensure_dir_exists(const char *dir_path)
     }
 
     char path[PERSISTENCE_MAX_PATH_LEN];
-    strncpy(path, dir_path, sizeof(path) - 1);
-    path[sizeof(path) - 1] = '\0';
+    snprintf(path, sizeof(path), "%s", dir_path);
 
     for (char *p = path + 1; *p; p++) {
         if (*p == '/') {
