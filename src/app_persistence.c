@@ -20,6 +20,10 @@
 #include <sqlite3.h>
 
 #define PERSISTENCE_MAX_PATH_LEN 256
+#define PERSISTENCE_DEFAULT_DB_PATH "gateway.db"
+#define PERSISTENCE_DEFAULT_MAX_RETRY_COUNT 3
+#define PERSISTENCE_DEFAULT_EXPIRE_HOURS 24
+#define PERSISTENCE_DEFAULT_MAX_QUEUE_SIZE 10000
 
 /* 数据库建表SQL语句 */
 static const char *SQL_CREATE_TABLE = 
@@ -99,6 +103,20 @@ static int ensure_db_parent_dir(const char *db_path)
 }
 
 /**
+ * @brief 填充持久化默认配置
+ */
+static void fill_default_persistence_config(PersistenceConfig *config)
+{
+    if (!config) {
+        return;
+    }
+    snprintf(config->db_path, sizeof(config->db_path), "%s", PERSISTENCE_DEFAULT_DB_PATH);
+    config->max_retry_count = PERSISTENCE_DEFAULT_MAX_RETRY_COUNT;
+    config->message_expire_hours = PERSISTENCE_DEFAULT_EXPIRE_HOURS;
+    config->max_queue_size = PERSISTENCE_DEFAULT_MAX_QUEUE_SIZE;
+}
+
+/**
  * @brief 初始化持久化管理器
  * 
  * 打开SQLite数据库，创建消息表和索引，配置WAL模式。
@@ -119,10 +137,7 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
         memcpy(&manager->config, config, sizeof(PersistenceConfig));
     } else {
         // 使用默认配置
-        strcpy(manager->config.db_path, "gateway.db");
-        manager->config.max_retry_count = 3;
-        manager->config.message_expire_hours = 24;
-        manager->config.max_queue_size = 10000;
+        fill_default_persistence_config(&manager->config);
     }
     
     if (ensure_db_parent_dir(manager->config.db_path) != 0) {
@@ -181,16 +196,13 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
 int persistence_init_default(PersistenceManager *manager, const char *db_path)
 {
     PersistenceConfig config = {0};
+    fill_default_persistence_config(&config);
     
     // 设置数据库路径
-    if (db_path) {
+    if (db_path && db_path[0] != '\0') {
         strncpy(config.db_path, db_path, sizeof(config.db_path) - 1);
-    } else {
-        strcpy(config.db_path, "gateway.db");
+        config.db_path[sizeof(config.db_path) - 1] = '\0';
     }
-    config.max_retry_count = 3;
-    config.message_expire_hours = 24;
-    config.max_queue_size = 10000;
     
     return persistence_init(manager, &config);
 }
