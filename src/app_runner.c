@@ -19,6 +19,8 @@
 #include "../thirdparty/log.c/log.h"
 
 #include <signal.h>
+#include <stdio.h>
+#include <string.h>
 
 /* 默认配置常量 */
 #define Device_Node "/dev/ttyUSB0"                    // 默认串口设备路径
@@ -30,6 +32,20 @@ static SerialDevice device;                           // 串口设备实例
 static RouterManager router;                          // 路由管理器实例
 static PersistenceManager persistence;                // 消息持久化管理器实例
 static volatile sig_atomic_t stop_requested = 0;      // 停止请求标志（原子变量）
+
+/**
+ * @brief 填充持久化默认配置
+ */
+static void load_default_persistence_config(PersistenceConfig *config)
+{
+    if (!config) {
+        return;
+    }
+    snprintf(config->db_path, sizeof(config->db_path), "%s", DEFAULT_DB_PATH);
+    config->max_retry_count = 3;
+    config->message_expire_hours = 24;
+    config->max_queue_size = 10000;
+}
 
 /**
  * @brief 信号处理函数
@@ -64,21 +80,14 @@ static int load_persistence_config(PersistenceConfig *config, const char *config
     // 初始化配置管理器
     if (config_init(&cfg_mgr, config_file) != 0) {
         log_warn("Failed to load config file, using defaults");
-        // 使用默认配置
-        strcpy(config->db_path, DEFAULT_DB_PATH);
-        config->max_retry_count = 3;
-        config->message_expire_hours = 24;
-        config->max_queue_size = 10000;
+        load_default_persistence_config(config);
         return 0;
     }
     
     // 加载配置文件
     if (config_load(&cfg_mgr) != 0) {
         log_warn("Failed to load config file, using defaults");
-        strcpy(config->db_path, DEFAULT_DB_PATH);
-        config->max_retry_count = 3;
-        config->message_expire_hours = 24;
-        config->max_queue_size = 10000;
+        load_default_persistence_config(config);
         return 0;
     }
     
@@ -86,9 +95,9 @@ static int load_persistence_config(PersistenceConfig *config, const char *config
     char db_path[256];
     if (config_get_string(&cfg_mgr, "persistence", "db_path", 
                   DEFAULT_DB_PATH, db_path, sizeof(db_path)) == 0) {
-        strncpy(config->db_path, db_path, sizeof(config->db_path) - 1);
+        snprintf(config->db_path, sizeof(config->db_path), "%s", db_path);
     } else {
-        strcpy(config->db_path, DEFAULT_DB_PATH);
+        snprintf(config->db_path, sizeof(config->db_path), "%s", DEFAULT_DB_PATH);
     }
     
     // 读取最大重试次数
@@ -119,6 +128,8 @@ static int load_persistence_config(PersistenceConfig *config, const char *config
 static void on_device_message_persist(RouterManager *router, Device *device,
                                        const void *data, size_t len)
 {
+    (void)router;
+    (void)device;
     // 保存消息到数据库
     uint64_t msg_id;
     if (persistence_save(&persistence, "GatewayData", data, len, 1, &msg_id) == 0) {
@@ -140,6 +151,8 @@ static void on_device_message_persist(RouterManager *router, Device *device,
 static void on_cloud_message_log(RouterManager *router, const char *topic,
                                   const void *data, size_t len)
 {
+    (void)router;
+    (void)data;
     log_info("Received command from cloud: topic=%s, len=%zu", topic, len);
 }
 

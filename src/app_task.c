@@ -402,9 +402,9 @@ void app_task_close(void)
     // 发送停止信号
     task_should_stop = 1;
     
-    // 唤醒所有等待的线程
+    // 唤醒所有等待线程，让其感知task_should_stop并退出等待
     pthread_mutex_lock(&queue_lock);
-    pthread_cond_broadcast(&queue_lock);
+    pthread_cond_broadcast(&queue_cond);
     pthread_mutex_unlock(&queue_lock);
 
     // 等待所有工作线程退出

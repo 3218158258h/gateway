@@ -150,21 +150,43 @@ static void app_device_defaultSendTask(void *argv)
         return;
     }
     
-    // 读取消息头
-    app_buffer_read(device->send_buffer, buf, 3);
-    
-    int id_len = buf[1];
-    int data_len = buf[2];
-    
-    // 检查数据完整性
-    if (device->send_buffer->len < id_len + data_len) {
-        log_warn("Incomplete send data");
+    // 先peek头部，不移除数据，避免不完整帧导致数据被提前消费
+    if (app_buffer_peek(device->send_buffer, buf, 3) < 3) {
         return;
     }
     
-    // 读取完整消息
-    app_buffer_read(device->send_buffer, buf + 3, id_len + data_len);
-    buf_len = 3 + id_len + data_len;
+    int id_len = buf[1];
+    int data_len = buf[2];
+    int total_len = id_len + data_len;
+    
+    // 检查数据完整性
+    if (device->send_buffer->len < 3 + total_len) {
+        log_warn("Incomplete send data");
+        return;
+    }
+
+    // 防止消息长度异常导致栈缓冲区溢出
+    if (3 + total_len > (int)sizeof(buf)) {
+        log_error("Send frame too large: %d", 3 + total_len);
+        // 完整丢弃异常帧，避免阻塞或污染后续正常数据
+        unsigned char drop_buf[256];
+        app_buffer_read(device->send_buffer, buf, 3);  // 丢弃头
+        int remaining = total_len;
+        while (remaining > 0) {
+            int chunk = remaining > (int)sizeof(drop_buf) ? (int)sizeof(drop_buf) : remaining;
+            int dropped = app_buffer_read(device->send_buffer, drop_buf, chunk);
+            if (dropped <= 0) break;
+            remaining -= dropped;
+        }
+        return;
+    }
+
+    // 读取完整消息（头部+负载）
+    app_buffer_read(device->send_buffer, buf, 3);
+    
+    // 读取剩余负载（ID + 数据）
+    app_buffer_read(device->send_buffer, buf + 3, total_len);
+    buf_len = 3 + total_len;
 
     // 调用协议层pre_write处理（如蓝牙帧封装）
     if (device->vptr->pre_write)
@@ -175,7 +197,12 @@ static void app_device_defaultSendTask(void *argv)
     // 写入设备文件描述符
     if (buf_len > 0)
     {
-        write(device->fd, buf, buf_len);
+        ssize_t written = write(device->fd, buf, buf_len);
+        if (written < 0) {
+            log_error("Device write failed");
+        } else if (written != buf_len) {
+            log_warn("Partial device write: %zd/%d", written, buf_len);
+        }
     }
 }
 

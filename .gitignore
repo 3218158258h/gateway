@@ -1,0 +1,6 @@
+build/
+test/subscriber
+test/publisher
+*.o
+*.a
+*.so

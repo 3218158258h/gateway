@@ -31,6 +31,7 @@ static time_t last_crash_time = 0;
  */
 void daemon_runner_close(int sig)
 {
+    (void)sig;
     is_running = 0;
 }
 
@@ -133,7 +134,10 @@ int daemon_runner_run()
             if (fd >= 0) {
                 char buf[64];
                 snprintf(buf, sizeof(buf), "crash_count=%d\n", crash_count);
-                write(fd, buf, strlen(buf));  // 写入崩溃计数
+                ssize_t written = write(fd, buf, strlen(buf));  // 写入崩溃计数
+                if (written < 0) {
+                    log_warn("Failed to write crash marker: %s", strerror(errno));
+                }
                 close(fd);                    // 关闭文件描述符
             }
         }

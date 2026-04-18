@@ -16,8 +16,7 @@
 #include <ctype.h>
 #include <strings.h>
 
-/* 全局配置管理器实例 */
-static ConfigManager g_config_instance;
+/* 全局配置管理器指针 */
 ConfigManager *g_config_manager = NULL;
 
 /**

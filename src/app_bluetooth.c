@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #include "../thirdparty/log.c/log.h"
 
 #define MAX_BLUETOOTH_DEVICES 4
@@ -63,6 +64,31 @@ static int app_bluetooth_waitACK(SerialDevice *serial_device)
     return -1;
 }
 
+/**
+ * @brief 发送AT命令并等待ACK
+ *
+ * 这里统一处理write返回值，避免部分写入或写失败被静默忽略，
+ * 导致后续ACK等待逻辑误判。
+ */
+static int bluetooth_send_cmd_expect_ack(SerialDevice *serial_device, const void *cmd, size_t len)
+{
+    if (!serial_device || !cmd || len == 0) {
+        return -1;
+    }
+
+    ssize_t written = write(serial_device->super.fd, cmd, len);
+    if (written < 0) {
+        log_error("Bluetooth write failed: %s", strerror(errno));
+        return -1;
+    }
+    if ((size_t)written != len) {
+        log_warn("Bluetooth partial write: %zd/%zu", written, len);
+        return -1;
+    }
+
+    return app_bluetooth_waitACK(serial_device);
+}
+
 int app_bluetooth_setConnectionType(SerialDevice *serial_device)
 {
     if (!serial_device) return -1;
@@ -109,8 +135,7 @@ int app_bluetooth_setConnectionType(SerialDevice *serial_device)
 int app_bluetooth_status(SerialDevice *serial_device)
 {
     if (!serial_device) return -1;
-    write(serial_device->super.fd, "AT\r\n", 4);
-    return app_bluetooth_waitACK(serial_device);
+    return bluetooth_send_cmd_expect_ack(serial_device, "AT\r\n", 4);
 }
 
 int app_bluetooth_setBaudRate(SerialDevice *serial_device, SerialBaudRate baud_rate)
@@ -118,15 +143,13 @@ int app_bluetooth_setBaudRate(SerialDevice *serial_device, SerialBaudRate baud_r
     if (!serial_device) return -1;
     char buf[] = "AT+BAUD8\r\n";
     buf[7] = baud_rate;
-    write(serial_device->super.fd, buf, 10);
-    return app_bluetooth_waitACK(serial_device);
+    return bluetooth_send_cmd_expect_ack(serial_device, buf, sizeof(buf) - 1);
 }
 
 int app_bluetooth_reset(SerialDevice *serial_device)
 {
     if (!serial_device) return -1;
-    write(serial_device->super.fd, "AT+RESET\r\n", 10);
-    return app_bluetooth_waitACK(serial_device);
+    return bluetooth_send_cmd_expect_ack(serial_device, "AT+RESET\r\n", 10);
 }
 
 int app_bluetooth_setNetID(SerialDevice *serial_device, char *net_id)
@@ -134,8 +157,7 @@ int app_bluetooth_setNetID(SerialDevice *serial_device, char *net_id)
     if (!serial_device || !net_id) return -1;
     char buf[] = "AT+NETID1111\r\n";
     memcpy(buf + 8, net_id, 4);
-    write(serial_device->super.fd, buf, 14);
-    return app_bluetooth_waitACK(serial_device);
+    return bluetooth_send_cmd_expect_ack(serial_device, buf, sizeof(buf) - 1);
 }
 
 int app_bluetooth_setMAddr(SerialDevice *serial_device, char *m_addr)
@@ -143,8 +165,7 @@ int app_bluetooth_setMAddr(SerialDevice *serial_device, char *m_addr)
     if (!serial_device || !m_addr) return -1;
     char buf[] = "AT+MADDR0001\r\n";
     memcpy(buf + 8, m_addr, 4);
-    write(serial_device->super.fd, buf, 14);
-    return app_bluetooth_waitACK(serial_device);
+    return bluetooth_send_cmd_expect_ack(serial_device, buf, sizeof(buf) - 1);
 }
 
 int app_bluetooth_postRead(Device *device, void *ptr, int *len)
