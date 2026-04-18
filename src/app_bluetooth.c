@@ -1,12 +1,18 @@
 #include "../include/app_bluetooth.h"
 #include <unistd.h>
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#include "../include/app_config.h"
 #include "../thirdparty/log.c/log.h"
 
 #define MAX_BLUETOOTH_DEVICES 4
 #define READ_BUFFER_SIZE 256
+#define BT_ADDR_STR_LEN 4
+#define DEFAULT_BT_MADDR "0001"
+#define DEFAULT_BT_NETID "1111"
+#define DEFAULT_BT_WORK_BAUD 115200
 
 typedef struct {
     int device_fd;
@@ -16,6 +22,52 @@ typedef struct {
 
 static BluetoothContext bt_contexts[MAX_BLUETOOTH_DEVICES];
 static int bt_context_count = 0;
+
+static SerialBaudRate app_bluetooth_resolveBaudRate(int baud_rate)
+{
+    if (baud_rate == 9600) {
+        return SERIAL_BAUD_RATE_9600;
+    }
+    return SERIAL_BAUD_RATE_115200;
+}
+
+static void app_bluetooth_loadRuntimeConfig(char *m_addr, size_t m_addr_len,
+                                            char *net_id, size_t net_id_len,
+                                            SerialBaudRate *work_baud)
+{
+    if (!m_addr || !net_id || !work_baud || m_addr_len < BT_ADDR_STR_LEN + 1 || net_id_len < BT_ADDR_STR_LEN + 1) {
+        return;
+    }
+
+    snprintf(m_addr, m_addr_len, "%s", DEFAULT_BT_MADDR);
+    snprintf(net_id, net_id_len, "%s", DEFAULT_BT_NETID);
+    *work_baud = app_bluetooth_resolveBaudRate(DEFAULT_BT_WORK_BAUD);
+
+    ConfigManager cfg_mgr;
+    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
+        log_warn("Bluetooth config load failed, using defaults");
+        return;
+    }
+
+    char value[CONFIG_MAX_VALUE_LEN] = {0};
+    if (config_get_string(&cfg_mgr, "bluetooth", "m_addr", DEFAULT_BT_MADDR, value, sizeof(value)) == 0 &&
+        strlen(value) == BT_ADDR_STR_LEN) {
+        snprintf(m_addr, m_addr_len, "%s", value);
+    }
+    if (config_get_string(&cfg_mgr, "bluetooth", "net_id", DEFAULT_BT_NETID, value, sizeof(value)) == 0 &&
+        strlen(value) == BT_ADDR_STR_LEN) {
+        snprintf(net_id, net_id_len, "%s", value);
+    }
+
+    int baud_rate = config_get_int(&cfg_mgr, "bluetooth", "baud_rate", DEFAULT_BT_WORK_BAUD);
+    if (baud_rate != 9600 && baud_rate != 115200) {
+        log_warn("Invalid [bluetooth].baud_rate=%d, fallback to %d", baud_rate, DEFAULT_BT_WORK_BAUD);
+        baud_rate = DEFAULT_BT_WORK_BAUD;
+    }
+    *work_baud = app_bluetooth_resolveBaudRate(baud_rate);
+
+    config_destroy(&cfg_mgr);
+}
 
 static BluetoothContext* get_or_create_context(int device_fd) {
     for (int i = 0; i < bt_context_count; i++) {
@@ -92,6 +144,11 @@ static int bluetooth_send_cmd_expect_ack(SerialDevice *serial_device, const void
 int app_bluetooth_setConnectionType(SerialDevice *serial_device)
 {
     if (!serial_device) return -1;
+
+    char m_addr[BT_ADDR_STR_LEN + 1] = {0};
+    char net_id[BT_ADDR_STR_LEN + 1] = {0};
+    SerialBaudRate work_baud = SERIAL_BAUD_RATE_115200;
+    app_bluetooth_loadRuntimeConfig(m_addr, sizeof(m_addr), net_id, sizeof(net_id), &work_baud);
     
     serial_device->super.connection_type = CONNECTION_TYPE_BLE_MESH;
     serial_device->super.vptr->post_read = app_bluetooth_postRead;
@@ -104,17 +161,17 @@ int app_bluetooth_setConnectionType(SerialDevice *serial_device)
     app_serial_flush(serial_device);
     if (app_bluetooth_status(serial_device) == 0)
     {
-        if (app_bluetooth_setMAddr(serial_device, "0001") < 0)
+        if (app_bluetooth_setMAddr(serial_device, m_addr) < 0)
         {
             log_error("Bluetooth: set maddr failed");
             return -1;
         }
-        if (app_bluetooth_setNetID(serial_device, "1111") < 0)
+        if (app_bluetooth_setNetID(serial_device, net_id) < 0)
         {
             log_error("Bluetooth: set netid failed");
             return -1;
         }
-        if (app_bluetooth_setBaudRate(serial_device, SERIAL_BAUD_RATE_9600) < 0)
+        if (app_bluetooth_setBaudRate(serial_device, work_baud) < 0)
         {
             log_error("Bluetooth: set baudrate failed");
             return -1;
@@ -125,7 +182,7 @@ int app_bluetooth_setConnectionType(SerialDevice *serial_device)
             return -1;
         }
     }
-    app_serial_setBaudRate(serial_device, SERIAL_BAUD_RATE_115200);
+    app_serial_setBaudRate(serial_device, work_baud);
     app_serial_setBlockMode(serial_device, 1);
     sleep(1);
     app_serial_flush(serial_device);
