@@ -20,6 +20,7 @@
 #include <pthread.h>
 #include <sys/socket.h>
 #include <time.h>
+#include <errno.h>
 
 /* 设备缓冲区大小（可通过配置覆盖） */
 #define DEFAULT_BUFFER_LEN 16384
@@ -163,14 +164,27 @@ static void app_device_defaultSendTask(void *argv)
         return;
     }
     
-    // 先peek头部，不移除数据，避免不完整帧导致数据被提前消费
-    if (app_buffer_peek(device->send_buffer, buf, 3) < 3) {
+    // Peek header first without consuming it to avoid partial-frame corruption
+    int peek_len = app_buffer_peek(device->send_buffer, buf, 3);
+    if (peek_len != 3) {
+        if (peek_len < 0) {
+            log_warn("Failed to peek send buffer header (device send path)");
+        } else {
+            log_debug("Insufficient header bytes for send frame validation: got=%d, need=3 (will retry)",
+                      peek_len);
+        }
         return;
     }
     
     int id_len = buf[1];
     int data_len = buf[2];
     int total_len = id_len + data_len;
+    if (total_len < 0 || total_len > ((int)sizeof(buf) - 3)) {
+        log_error("Invalid send frame length: id_len=%d, data_len=%d", id_len, data_len);
+        unsigned char drop_header[3];
+        app_buffer_read(device->send_buffer, drop_header, 3);
+        return;
+    }
     
     // 检查数据完整性
     if (device->send_buffer->len < 3 + total_len) {
@@ -181,9 +195,9 @@ static void app_device_defaultSendTask(void *argv)
     // 防止消息长度异常导致栈缓冲区溢出
     if (3 + total_len > (int)sizeof(buf)) {
         log_error("Send frame too large: %d", 3 + total_len);
-        // 完整丢弃异常帧，避免阻塞或污染后续正常数据
+        // Drop the whole invalid frame to avoid blocking or polluting next frames
         unsigned char drop_buf[256];
-        app_buffer_read(device->send_buffer, buf, 3);  // 丢弃头
+        app_buffer_read(device->send_buffer, buf, 3);  // discard header
         int remaining = total_len;
         while (remaining > 0) {
             int chunk = remaining > (int)sizeof(drop_buf) ? (int)sizeof(drop_buf) : remaining;
@@ -194,10 +208,10 @@ static void app_device_defaultSendTask(void *argv)
         return;
     }
 
-    // 读取完整消息（头部+负载）
+    // Read full message (header + payload)
     app_buffer_read(device->send_buffer, buf, 3);
     
-    // 读取剩余负载（ID + 数据）
+    // Read remaining payload (ID + data)
     app_buffer_read(device->send_buffer, buf + 3, total_len);
     buf_len = 3 + total_len;
 
@@ -212,7 +226,9 @@ static void app_device_defaultSendTask(void *argv)
     {
         ssize_t written = write(device->fd, buf, buf_len);
         if (written < 0) {
-            log_error("Device write failed");
+            log_error("Device write failed for %s: %s",
+                      device->filename ? device->filename : "(unknown)",
+                      strerror(errno));
         } else if (written != buf_len) {
             log_warn("Partial device write: %zd/%d", written, buf_len);
         }

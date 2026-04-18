@@ -403,7 +403,7 @@ void app_task_close(void)
     // 发送停止信号
     task_should_stop = 1;
     
-    // 唤醒所有等待线程，让其感知task_should_stop并退出等待
+    // Wake all waiting threads so they can observe task_should_stop and exit
     pthread_mutex_lock(&queue_lock);
     pthread_cond_broadcast(&queue_cond);
     pthread_mutex_unlock(&queue_lock);
