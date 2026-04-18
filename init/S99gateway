@@ -1,0 +1,44 @@
+#!/bin/sh
+start() {
+    # 检测error文件是否存在
+    if test -f "/tmp/gateway.error"; then
+        rm -f "/tmp/gateway.ota"
+        rm -f "/tmp/gateway.error"
+        if test -f "/usr/bin/gateway.old"; then
+            mv -f "/usr/bin/gateway.old" "/usr/bin/gateway"
+        fi
+    # 检查是否存在OTA更新文件
+    elif test -f "/tmp/gateway.ota"; then
+        mv -f "/usr/bin/gateway" "/usr/bin/gateway.old"
+        mv -f "/tmp/gateway.ota" "/usr/bin/gateway"
+        chmod 755 "/usr/bin/gateway"
+    fi
+
+    printf "Starting gateway: "
+    start-stop-daemon -S -q -p /var/run/gateway.pid \
+            --exec /usr/bin/gateway -- daemon
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+stop() {
+    printf "Stopping gateway: "
+    start-stop-daemon -K -q -p /var/run/gateway.pid
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+case "$1" in
+  start)
+        start
+        ;;
+  stop)
+        stop
+        ;;
+  restart|reload)
+        stop
+        start
+        ;;
+  *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?

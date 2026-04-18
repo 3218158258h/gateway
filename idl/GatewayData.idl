@@ -1,0 +1,11 @@
+module Gateway {
+    struct DataType {
+        octet data[4096];
+        unsigned long length;
+    };
+    
+    struct CommandType {
+        octet data[4096];
+        unsigned long length;
+    };
+};
