@@ -26,6 +26,29 @@
 #define DEFAULT_BUFFER_LEN 16384
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
 
+/**
+ * @brief 关闭设备文件描述符并重置为-1
+ */
+static void app_device_close_fd(Device *device)
+{
+    if (device && device->fd >= 0) {
+        close(device->fd);
+        device->fd = -1;
+    }
+}
+
+/**
+ * @brief 释放设备缓冲区资源
+ */
+static void app_device_release_buffer(Buffer **buffer)
+{
+    if (buffer && *buffer) {
+        app_buffer_close(*buffer);
+        free(*buffer);
+        *buffer = NULL;
+    }
+}
+
 void app_device_set_buffer_size(int size)
 {
     if (size > 0) {
@@ -310,7 +333,7 @@ int app_device_init(Device *device, char *filename)
 DEVICE_RECV_INIT_FAIL:
     app_buffer_close(device->recv_buffer);
 DEVICE_OPEN_FAIL:
-    close(device->fd);
+    app_device_close_fd(device);
 DEVICE_SEND_BUFFER_EXIT:
     free(device->send_buffer);
 DEVICE_RECV_BUFFER_EXIT:
@@ -413,10 +436,7 @@ void app_device_stop(Device *device)
         device->is_running = 0;
         
         // 关闭文件描述符（会触发read返回）
-        if (device->fd >= 0) {
-            close(device->fd);
-            device->fd = -1;
-        }
+        app_device_close_fd(device);
         
         // 设置2秒超时等待线程退出
         struct timespec ts;
@@ -447,24 +467,13 @@ void app_device_close(Device *device)
     app_device_stop(device);
     
     // 释放发送缓冲区
-    if (device->send_buffer) {
-        app_buffer_close(device->send_buffer);
-        free(device->send_buffer);
-        device->send_buffer = NULL;
-    }
+    app_device_release_buffer(&device->send_buffer);
     
     // 释放接收缓冲区
-    if (device->recv_buffer) {
-        app_buffer_close(device->recv_buffer);
-        free(device->recv_buffer);
-        device->recv_buffer = NULL;
-    }
+    app_device_release_buffer(&device->recv_buffer);
     
     // 关闭文件描述符
-    if (device->fd >= 0) {
-        close(device->fd);
-        device->fd = -1;
-    }
+    app_device_close_fd(device);
     
     // 释放虚函数表
     if (device->vptr) {
