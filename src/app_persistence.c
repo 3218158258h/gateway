@@ -51,7 +51,8 @@ static int ensure_dir_exists(const char *dir_path)
     char path[PERSISTENCE_MAX_PATH_LEN];
     snprintf(path, sizeof(path), "%s", dir_path);
 
-    for (char *p = path + 1; *p; p++) {
+    char *iter = (path[0] == '/') ? (path + 1) : path;
+    for (char *p = iter; *p; p++) {
         if (*p == '/') {
             *p = '\0';
             if (mkdir(path, 0755) != 0 && errno != EEXIST) {
