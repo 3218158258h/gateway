@@ -25,10 +25,18 @@
 #include <stdlib.h>
 
 /* 默认配置常量 */
-#define DEFAULT_CONFIG_FILE "/home/nvidia/gateway/gateway.ini"  // 默认配置文件路径
-#define DEFAULT_DB_PATH "/home/nvidia/gateway/gateway.db"       // 默认数据库路径
+#define DEFAULT_DB_PATH "gateway.db"                             // 默认数据库路径
 #define MAX_SERIAL_DEVICES ROUTER_MAX_DEVICES
 #define MAX_DEVICE_PATH_LEN 256
+#define DEFAULT_TASK_EXECUTORS 5
+#define DEFAULT_PERSIST_QUEUE_SIZE 10000
+#define DEFAULT_DEVICE_BUFFER_SIZE 16384
+
+typedef struct RuntimeConfig {
+    int thread_pool_executors;
+    int device_buffer_size;
+    int persistence_max_queue_size;
+} RuntimeConfig;
 
 /* 全局静态变量 */
 static SerialDevice devices[MAX_SERIAL_DEVICES];      // 串口设备实例数组
@@ -91,8 +99,8 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_co
     }
     
     ConfigManager cfg_mgr;
-    if (config_init(&cfg_mgr, DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
-        log_error("Failed to load device config file: %s", DEFAULT_CONFIG_FILE);
+    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
+        log_error("Failed to load device config file: %s", APP_DEFAULT_CONFIG_FILE);
         return -1;
     }
 
@@ -152,7 +160,55 @@ static void load_default_persistence_config(PersistenceConfig *config)
     snprintf(config->db_path, sizeof(config->db_path), "%s", DEFAULT_DB_PATH);
     config->max_retry_count = 3;
     config->message_expire_hours = 24;
-    config->max_queue_size = 10000;
+    config->max_queue_size = DEFAULT_PERSIST_QUEUE_SIZE;
+}
+
+static int load_runtime_config(RuntimeConfig *runtime)
+{
+    if (!runtime) {
+        return -1;
+    }
+
+    runtime->thread_pool_executors = DEFAULT_TASK_EXECUTORS;
+    runtime->device_buffer_size = DEFAULT_DEVICE_BUFFER_SIZE;
+    runtime->persistence_max_queue_size = DEFAULT_PERSIST_QUEUE_SIZE;
+
+    ConfigManager cfg_mgr;
+    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
+        log_error("Failed to load runtime config file: %s", APP_DEFAULT_CONFIG_FILE);
+        return -1;
+    }
+
+    runtime->thread_pool_executors = config_get_int(
+        &cfg_mgr, "runtime", "thread_pool_executors", DEFAULT_TASK_EXECUTORS);
+    runtime->device_buffer_size = config_get_int(
+        &cfg_mgr, "device", "buffer_size", DEFAULT_DEVICE_BUFFER_SIZE);
+    runtime->persistence_max_queue_size = config_get_int(
+        &cfg_mgr, "persistence", "max_queue_size", DEFAULT_PERSIST_QUEUE_SIZE);
+
+    config_destroy(&cfg_mgr);
+
+    if (runtime->thread_pool_executors <= 0) {
+        log_error("Invalid config [runtime].thread_pool_executors: %d",
+                  runtime->thread_pool_executors);
+        return -1;
+    }
+    if (runtime->device_buffer_size <= 0) {
+        log_error("Invalid config [device].buffer_size: %d",
+                  runtime->device_buffer_size);
+        return -1;
+    }
+    if (runtime->persistence_max_queue_size <= 0) {
+        log_error("Invalid config [persistence].max_queue_size: %d",
+                  runtime->persistence_max_queue_size);
+        return -1;
+    }
+
+    log_info("Runtime config loaded: thread_pool_executors=%d, device_buffer_size=%d, persistence_max_queue_size=%d",
+             runtime->thread_pool_executors,
+             runtime->device_buffer_size,
+             runtime->persistence_max_queue_size);
+    return 0;
 }
 
 /**
@@ -215,7 +271,13 @@ static int load_persistence_config(PersistenceConfig *config, const char *config
     config->message_expire_hours = config_get_int(&cfg_mgr, "persistence", "expire_hours", 24);
     
     // 设置最大队列大小
-    config->max_queue_size = 10000;
+    config->max_queue_size = config_get_int(&cfg_mgr, "persistence", "max_queue_size",
+                                            DEFAULT_PERSIST_QUEUE_SIZE);
+    if (config->max_queue_size <= 0) {
+        log_error("Invalid config [persistence].max_queue_size: %d", config->max_queue_size);
+        config_destroy(&cfg_mgr);
+        return -1;
+    }
     
     // 销毁配置管理器
     config_destroy(&cfg_mgr);
@@ -286,14 +348,24 @@ int app_runner_run()
     signal(SIGINT, app_runner_signal_handler);
     signal(SIGTERM, app_runner_signal_handler);
 
-    // 初始化线程池（5个工作线程）
-    if (app_task_init(5) != 0) {
+    RuntimeConfig runtime_config;
+    if (load_runtime_config(&runtime_config) != 0) {
+        return -1;
+    }
+    app_device_set_buffer_size(runtime_config.device_buffer_size);
+
+    // 初始化线程池
+    if (app_task_init(runtime_config.thread_pool_executors) != 0) {
         return -1;
     }
 
     // 初始化持久化模块
     PersistenceConfig persist_config;
-    load_persistence_config(&persist_config, DEFAULT_CONFIG_FILE);
+    if (load_persistence_config(&persist_config, APP_DEFAULT_CONFIG_FILE) != 0) {
+        app_task_close();
+        return -1;
+    }
+    persist_config.max_queue_size = runtime_config.persistence_max_queue_size;
     
     if (persistence_init(&persistence, &persist_config) != 0) {
         log_warn("Failed to init persistence, continuing without persistence");
@@ -316,6 +388,10 @@ int app_runner_run()
         app_task_close();
         return -1;
     }
+    log_info("Startup summary: configured_device_count=%d, device_buffer_size=%d, persistence_queue_size=%d",
+             configured_device_count,
+             app_device_get_buffer_size(),
+             persist_config.max_queue_size);
 
     int initialized_device_count = 0;
     for (int i = 0; i < configured_device_count; i++) {

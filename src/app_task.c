@@ -151,7 +151,7 @@ static void task_queue_clear(TaskQueue *queue)
  */
 static void cleanup_handler(void *arg)
 {
-    log_info("Executor %d cleaned up", *(int*)arg);
+    log_debug("Executor %d cleaned up", *(int*)arg);
 }
 
 /**
@@ -167,7 +167,6 @@ static void *app_task_executor(void *argv)
 {
     int executor_id = *(int*)argv;
     free(argv);
-    log_info("Executor %d started", executor_id);
 
     int id = executor_id;
     pthread_cleanup_push(cleanup_handler, &id);
@@ -191,7 +190,6 @@ static void *app_task_executor(void *argv)
         // 检查停止信号
         if (task_should_stop) {
             pthread_mutex_unlock(&queue_lock);
-            log_info("Executor %d received stop signal", executor_id);
             break;
         }
         
@@ -216,7 +214,6 @@ static void *app_task_executor(void *argv)
     }
 
     pthread_cleanup_pop(1);
-    log_info("Executor %d exited", executor_id);
     return NULL;
 }
 
@@ -291,10 +288,13 @@ int app_task_init(int executors)
 
     is_initialized = 1;
     task_should_stop = 0;
-    log_info("Task manager started with %d executors (queue mode)", executors_count);
+    log_info("Task manager init result: requested=%d, created=%d, missing=0",
+             executors, executors_count);
     return 0;
 
 THREAD_EXIT:
+    int requested = executors_count;
+    int created = i;
     // 清理已创建的线程
     for (int j = 0; j < i; j++) {
         if (executor_ptr[j]) {
@@ -310,7 +310,8 @@ THREAD_EXIT:
     pthread_cond_destroy(&queue_cond);
     executors_count = 0;
 
-    log_error("Task manager initialization failed");
+    log_error("Task manager init failed: requested=%d, created=%d, missing=%d",
+              requested, created, requested - created);
     return -1;
 }
 

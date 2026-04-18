@@ -21,8 +21,21 @@
 #include <sys/socket.h>
 #include <time.h>
 
-/* 缓冲区大小常量 */
-#define BUFFER_LEN 16384  // 16KB
+/* 设备缓冲区大小（可通过配置覆盖） */
+#define DEFAULT_BUFFER_LEN 16384
+static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
+
+void app_device_set_buffer_size(int size)
+{
+    if (size > 0) {
+        g_device_buffer_len = size;
+    }
+}
+
+int app_device_get_buffer_size(void)
+{
+    return g_device_buffer_len;
+}
 
 /**
  * @brief 设备后台读取任务
@@ -269,13 +282,13 @@ int app_device_init(Device *device, char *filename)
     device->connection_type = CONNECTION_TYPE_NONE;
     
     // 初始化接收缓冲区
-    if (app_buffer_init(device->recv_buffer, BUFFER_LEN) < 0)
+    if (app_buffer_init(device->recv_buffer, g_device_buffer_len) < 0)
     {
         goto DEVICE_OPEN_FAIL;
     }
     
     // 初始化发送缓冲区
-    if (app_buffer_init(device->send_buffer, BUFFER_LEN) < 0)
+    if (app_buffer_init(device->send_buffer, g_device_buffer_len) < 0)
     {
         goto DEVICE_RECV_INIT_FAIL;
     }
@@ -290,7 +303,7 @@ int app_device_init(Device *device, char *filename)
     device->vptr->post_read = NULL;    // 读后处理（由子类实现）
     device->vptr->recv_callback = NULL; // 接收回调（由上层注册）
 
-    log_info("Device %s initialized", device->filename);
+    log_info("Device %s initialized (buffer_size=%d)", device->filename, g_device_buffer_len);
 
     return 0;
 

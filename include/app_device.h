@@ -30,6 +30,8 @@ struct VTable
 };
 
 int app_device_init(Device *device, char *filename);
+void app_device_set_buffer_size(int size);
+int app_device_get_buffer_size(void);
 
 /**
  * @brief 启动设备后台线程

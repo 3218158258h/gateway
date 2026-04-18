@@ -119,7 +119,7 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
         memcpy(&manager->config, config, sizeof(PersistenceConfig));
     } else {
         // 使用默认配置
-        strcpy(manager->config.db_path, "/home/nvidia/gateway/gateway.db");
+        strcpy(manager->config.db_path, "gateway.db");
         manager->config.max_retry_count = 3;
         manager->config.message_expire_hours = 24;
         manager->config.max_queue_size = 10000;
@@ -186,7 +186,7 @@ int persistence_init_default(PersistenceManager *manager, const char *db_path)
     if (db_path) {
         strncpy(config.db_path, db_path, sizeof(config.db_path) - 1);
     } else {
-        strcpy(config.db_path, "/home/nvidia/gateway/gateway.db");
+        strcpy(config.db_path, "gateway.db");
     }
     config.max_retry_count = 3;
     config.message_expire_hours = 24;

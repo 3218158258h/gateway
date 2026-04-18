@@ -254,51 +254,120 @@ int transport_init_from_config(TransportManager *manager, const char *config_fil
     
     ConfigManager config;
     if (config_init(&config, config_file) != 0) {
-        log_warn("Failed to load config file, using defaults");
-        return transport_init(manager, NULL);
+        log_error("Failed to init config file: %s", config_file ? config_file : "(null)");
+        return -1;
     }
     
-    config_load(&config);
+    if (config_load(&config) != 0) {
+        log_error("Failed to load config file: %s", config_file ? config_file : "(null)");
+        config_destroy(&config);
+        return -1;
+    }
     
     TransportConfig tconfig = {0};
     
     // 读取传输类型
-    char type_str[32] = "mqtt";
-    config_get_string(&config, "transport", "type", "mqtt", type_str, sizeof(type_str));
+    char type_str[32] = {0};
+    if (config_get_string(&config, "transport", "type", NULL, type_str, sizeof(type_str)) != 0 ||
+        type_str[0] == '\0') {
+        log_error("Missing required config: [transport].type");
+        config_destroy(&config);
+        return -1;
+    }
     tconfig.type = transport_string_to_type(type_str);
     
     // MQTT配置
-    config_get_string(&config, "mqtt", "server", "tcp://localhost:1883",
-                     tconfig.mqtt_broker, sizeof(tconfig.mqtt_broker));
-    config_get_string(&config, "mqtt", "client_id", "gateway",
-                     tconfig.mqtt_client_id, sizeof(tconfig.mqtt_client_id));
-    tconfig.mqtt_keepalive = config_get_int(&config, "mqtt", "keepalive", 60);
+    if (config_get_string(&config, "mqtt", "server", NULL,
+                     tconfig.mqtt_broker, sizeof(tconfig.mqtt_broker)) != 0 ||
+        tconfig.mqtt_broker[0] == '\0') {
+        log_error("Missing required config: [mqtt].server");
+        config_destroy(&config);
+        return -1;
+    }
+    if (config_get_string(&config, "mqtt", "client_id", NULL,
+                     tconfig.mqtt_client_id, sizeof(tconfig.mqtt_client_id)) != 0 ||
+        tconfig.mqtt_client_id[0] == '\0') {
+        log_error("Missing required config: [mqtt].client_id");
+        config_destroy(&config);
+        return -1;
+    }
+    tconfig.mqtt_keepalive = config_get_int(&config, "mqtt", "keepalive", -1);
+    if (tconfig.mqtt_keepalive <= 0) {
+        log_error("Invalid required config: [mqtt].keepalive=%d", tconfig.mqtt_keepalive);
+        config_destroy(&config);
+        return -1;
+    }
     
     // DDS配置
-    tconfig.dds_domain_id = config_get_int(&config, "dds", "domain_id", 0);
-    config_get_string(&config, "dds", "participant_name", "gateway",
-                     tconfig.dds_participant_name, sizeof(tconfig.dds_participant_name));
+    tconfig.dds_domain_id = config_get_int(&config, "dds", "domain_id", -1);
+    if (tconfig.dds_domain_id < 0) {
+        log_error("Invalid required config: [dds].domain_id=%d", tconfig.dds_domain_id);
+        config_destroy(&config);
+        return -1;
+    }
+    if (config_get_string(&config, "dds", "participant_name", NULL,
+                     tconfig.dds_participant_name, sizeof(tconfig.dds_participant_name)) != 0 ||
+        tconfig.dds_participant_name[0] == '\0') {
+        log_error("Missing required config: [dds].participant_name");
+        config_destroy(&config);
+        return -1;
+    }
     
     // ========== 话题配置 ==========
     
     // MQTT话题
-    config_get_string(&config, "mqtt", "publish_topic", "gateway/data",
-                     tconfig.publish_topic, sizeof(tconfig.publish_topic));
-    config_get_string(&config, "mqtt", "subscribe_topic", "gateway/command",
-                     tconfig.subscribe_topic, sizeof(tconfig.subscribe_topic));
+    if (config_get_string(&config, "mqtt", "publish_topic", NULL,
+                     tconfig.publish_topic, sizeof(tconfig.publish_topic)) != 0 ||
+        tconfig.publish_topic[0] == '\0') {
+        log_error("Missing required config: [mqtt].publish_topic");
+        config_destroy(&config);
+        return -1;
+    }
+    if (config_get_string(&config, "mqtt", "subscribe_topic", NULL,
+                     tconfig.subscribe_topic, sizeof(tconfig.subscribe_topic)) != 0 ||
+        tconfig.subscribe_topic[0] == '\0') {
+        log_error("Missing required config: [mqtt].subscribe_topic");
+        config_destroy(&config);
+        return -1;
+    }
     
     // DDS话题
-    config_get_string(&config, "dds", "publish_topic", "GatewayData",
-                     tconfig.dds_publish_topic, sizeof(tconfig.dds_publish_topic));
-    config_get_string(&config, "dds", "publish_type", "GatewayDataType",
-                     tconfig.dds_publish_type, sizeof(tconfig.dds_publish_type));
-    config_get_string(&config, "dds", "subscribe_topic", "GatewayCommand",
-                     tconfig.dds_subscribe_topic, sizeof(tconfig.dds_subscribe_topic));
-    config_get_string(&config, "dds", "subscribe_type", "GatewayCommandType",
-                     tconfig.dds_subscribe_type, sizeof(tconfig.dds_subscribe_type));
+    if (config_get_string(&config, "dds", "publish_topic", NULL,
+                     tconfig.dds_publish_topic, sizeof(tconfig.dds_publish_topic)) != 0 ||
+        tconfig.dds_publish_topic[0] == '\0') {
+        log_error("Missing required config: [dds].publish_topic");
+        config_destroy(&config);
+        return -1;
+    }
+    if (config_get_string(&config, "dds", "publish_type", NULL,
+                     tconfig.dds_publish_type, sizeof(tconfig.dds_publish_type)) != 0 ||
+        tconfig.dds_publish_type[0] == '\0') {
+        log_error("Missing required config: [dds].publish_type");
+        config_destroy(&config);
+        return -1;
+    }
+    if (config_get_string(&config, "dds", "subscribe_topic", NULL,
+                     tconfig.dds_subscribe_topic, sizeof(tconfig.dds_subscribe_topic)) != 0 ||
+        tconfig.dds_subscribe_topic[0] == '\0') {
+        log_error("Missing required config: [dds].subscribe_topic");
+        config_destroy(&config);
+        return -1;
+    }
+    if (config_get_string(&config, "dds", "subscribe_type", NULL,
+                     tconfig.dds_subscribe_type, sizeof(tconfig.dds_subscribe_type)) != 0 ||
+        tconfig.dds_subscribe_type[0] == '\0') {
+        log_error("Missing required config: [dds].subscribe_type");
+        config_destroy(&config);
+        return -1;
+    }
     
     // QoS配置
-    tconfig.default_qos = config_get_int(&config, "transport", "default_qos", 1);
+    tconfig.default_qos = config_get_int(&config, "transport", "default_qos", -1);
+    if (tconfig.default_qos < 0) {
+        log_error("Invalid required config: [transport].default_qos=%d", tconfig.default_qos);
+        config_destroy(&config);
+        return -1;
+    }
     
     config_destroy(&config);
     
