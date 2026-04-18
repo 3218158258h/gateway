@@ -25,7 +25,6 @@
 #include <stdlib.h>
 
 /* 默认配置常量 */
-#define DEFAULT_SERIAL_DEVICE "/dev/ttyUSB0"          // 默认串口设备路径
 #define DEFAULT_CONFIG_FILE "/home/nvidia/gateway/gateway.ini"  // 默认配置文件路径
 #define DEFAULT_DB_PATH "/home/nvidia/gateway/gateway.db"       // 默认数据库路径
 #define MAX_SERIAL_DEVICES ROUTER_MAX_DEVICES
@@ -93,10 +92,8 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_co
     
     ConfigManager cfg_mgr;
     if (config_init(&cfg_mgr, DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
-        log_warn("Failed to load device config, using default device: %s", DEFAULT_SERIAL_DEVICE);
-        snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", DEFAULT_SERIAL_DEVICE);
-        *out_count = 1;
-        return 0;
+        log_error("Failed to load device config file: %s", DEFAULT_CONFIG_FILE);
+        return -1;
     }
 
     int max_devices = config_get_int(&cfg_mgr, "device", "max_devices", ROUTER_MAX_DEVICES);
@@ -117,12 +114,25 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_co
             config_destroy(&cfg_mgr);
             return 0;
         }
+        log_error("Invalid [device].serial_devices: %s", serial_devices);
+        config_destroy(&cfg_mgr);
+        return -1;
     }
 
     char single_device[MAX_DEVICE_PATH_LEN];
-    config_get_string(&cfg_mgr, "bluetooth", "device",
-                      DEFAULT_SERIAL_DEVICE, single_device, sizeof(single_device));
-    snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", single_device);
+    if (config_get_string(&cfg_mgr, "bluetooth", "device",
+                          NULL, single_device, sizeof(single_device)) != 0) {
+        log_error("Missing required config: [bluetooth].device");
+        config_destroy(&cfg_mgr);
+        return -1;
+    }
+    char *trimmed = trim_whitespace(single_device);
+    if (!trimmed || trimmed[0] == '\0') {
+        log_error("Empty required config: [bluetooth].device");
+        config_destroy(&cfg_mgr);
+        return -1;
+    }
+    snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
     *out_count = 1;
 
     config_destroy(&cfg_mgr);
@@ -297,7 +307,13 @@ int app_runner_run()
     // 从配置加载设备列表并初始化串口设备
     char device_paths[MAX_SERIAL_DEVICES][MAX_DEVICE_PATH_LEN];
     int configured_device_count = 0;
-    load_device_config(device_paths, &configured_device_count);
+    if (load_device_config(device_paths, &configured_device_count) != 0) {
+        if (persistence.is_initialized) {
+            persistence_close(&persistence);
+        }
+        app_task_close();
+        return -1;
+    }
 
     int initialized_device_count = 0;
     for (int i = 0; i < configured_device_count; i++) {
