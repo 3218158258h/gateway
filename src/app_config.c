@@ -28,7 +28,11 @@ ConfigManager *g_config_manager = NULL;
  */
 static void copy_string_value(char *out_value, size_t max_len, const char *value)
 {
-    if (!out_value || max_len == 0 || !value) {
+    if (!out_value || max_len == 0) {
+        return;
+    }
+    if (!value) {
+        out_value[0] = '\0';
         return;
     }
     strncpy(out_value, value, max_len - 1);
