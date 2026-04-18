@@ -20,6 +20,22 @@
 ConfigManager *g_config_manager = NULL;
 
 /**
+ * @brief 安全复制字符串到缓冲区
+ *
+ * @param out_value 输出缓冲区
+ * @param max_len 输出缓冲区长度
+ * @param value 源字符串
+ */
+static void copy_string_value(char *out_value, size_t max_len, const char *value)
+{
+    if (!out_value || max_len == 0 || !value) {
+        return;
+    }
+    strncpy(out_value, value, max_len - 1);
+    out_value[max_len - 1] = '\0';
+}
+
+/**
  * @brief 获取全局配置管理器
  * 
  * @return 全局配置管理器指针
@@ -330,28 +346,25 @@ int config_reload(ConfigManager *config)
 int config_get_string(ConfigManager *config, const char *section, const char *key,
                       const char *default_value, char *out_value, size_t max_len)
 {
+    if (!out_value || max_len == 0) {
+        return -1;
+    }
+
     // 参数校验
-    if (!config || !section || !key || !out_value) {
-        if (default_value && out_value && max_len > 0) {
-            strncpy(out_value, default_value, max_len - 1);
-            out_value[max_len - 1] = '\0';
-        }
+    if (!config || !section || !key) {
+        copy_string_value(out_value, max_len, default_value);
         return -1;
     }
     
     // 查找配置项
     ConfigItem *item = find_item(config, section, key);
     if (item) {
-        strncpy(out_value, item->value, max_len - 1);
-        out_value[max_len - 1] = '\0';
+        copy_string_value(out_value, max_len, item->value);
         return 0;
     }
     
     // 未找到，使用默认值
-    if (default_value) {
-        strncpy(out_value, default_value, max_len - 1);
-        out_value[max_len - 1] = '\0';
-    }
+    copy_string_value(out_value, max_len, default_value);
     return -1;
 }
 

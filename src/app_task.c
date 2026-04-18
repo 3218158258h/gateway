@@ -49,6 +49,15 @@ static pthread_cond_t queue_cond;           // 队列条件变量
 static int is_initialized = 0;              // 初始化标志
 
 /**
+ * @brief 销毁任务管理器同步原语
+ */
+static void app_task_destroy_sync_primitives(void)
+{
+    pthread_mutex_destroy(&queue_lock);
+    pthread_cond_destroy(&queue_cond);
+}
+
+/**
  * @brief 初始化任务队列
  * 
  * @param queue 队列指针
@@ -238,16 +247,14 @@ int app_task_init(int executors)
     // 检查是否已初始化
     if (is_initialized || executor_ptr != NULL || executors_count > 0) {
         log_error("Task manager already initialized");
-        pthread_mutex_destroy(&queue_lock);
-        pthread_cond_destroy(&queue_cond);
+        app_task_destroy_sync_primitives();
         return -1;
     }
 
     // 检查线程数量参数
     if (executors <= 0) {
         log_error("Invalid executors count: %d", executors);
-        pthread_mutex_destroy(&queue_lock);
-        pthread_cond_destroy(&queue_cond);
+        app_task_destroy_sync_primitives();
         return -1;
     }
 
@@ -255,8 +262,7 @@ int app_task_init(int executors)
     executors_count = executors;
     executor_ptr = malloc(executors_count * sizeof(pthread_t));
     if (!executor_ptr) {
-        pthread_mutex_destroy(&queue_lock);
-        pthread_cond_destroy(&queue_cond);
+        app_task_destroy_sync_primitives();
         executors_count = 0;
         return -1;
     }
@@ -301,8 +307,7 @@ THREAD_EXIT:
     // 清理资源
     free(executor_ptr);
     executor_ptr = NULL;
-    pthread_mutex_destroy(&queue_lock);
-    pthread_cond_destroy(&queue_cond);
+    app_task_destroy_sync_primitives();
     executors_count = 0;
 
     log_error("Task manager init failed: requested=%d, created=%d, missing=%d",
@@ -422,8 +427,7 @@ void app_task_close(void)
     pthread_mutex_unlock(&queue_lock);
 
     // 销毁同步原语
-    pthread_mutex_destroy(&queue_lock);
-    pthread_cond_destroy(&queue_cond);
+    app_task_destroy_sync_primitives();
 
     executors_count = 0;
     is_initialized = 0;
