@@ -143,7 +143,7 @@ int app_bluetooth_setBaudRate(SerialDevice *serial_device, SerialBaudRate baud_r
     if (!serial_device) return -1;
     char buf[] = "AT+BAUD8\r\n";
     buf[7] = baud_rate;
-    return bluetooth_send_cmd_expect_ack(serial_device, buf, sizeof(buf) - 1);
+    return bluetooth_send_cmd_expect_ack(serial_device, buf, strlen(buf));
 }
 
 int app_bluetooth_reset(SerialDevice *serial_device)
@@ -157,7 +157,7 @@ int app_bluetooth_setNetID(SerialDevice *serial_device, char *net_id)
     if (!serial_device || !net_id) return -1;
     char buf[] = "AT+NETID1111\r\n";
     memcpy(buf + 8, net_id, 4);
-    return bluetooth_send_cmd_expect_ack(serial_device, buf, sizeof(buf) - 1);
+    return bluetooth_send_cmd_expect_ack(serial_device, buf, strlen(buf));
 }
 
 int app_bluetooth_setMAddr(SerialDevice *serial_device, char *m_addr)
@@ -165,7 +165,7 @@ int app_bluetooth_setMAddr(SerialDevice *serial_device, char *m_addr)
     if (!serial_device || !m_addr) return -1;
     char buf[] = "AT+MADDR0001\r\n";
     memcpy(buf + 8, m_addr, 4);
-    return bluetooth_send_cmd_expect_ack(serial_device, buf, sizeof(buf) - 1);
+    return bluetooth_send_cmd_expect_ack(serial_device, buf, strlen(buf));
 }
 
 int app_bluetooth_postRead(Device *device, void *ptr, int *len)
