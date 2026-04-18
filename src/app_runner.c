@@ -90,13 +90,12 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_co
     if (!out_paths || !out_count) {
         return -1;
     }
-
-    snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", DEFAULT_SERIAL_DEVICE);
-    *out_count = 1;
-
+    
     ConfigManager cfg_mgr;
     if (config_init(&cfg_mgr, DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
         log_warn("Failed to load device config, using default device: %s", DEFAULT_SERIAL_DEVICE);
+        snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", DEFAULT_SERIAL_DEVICE);
+        *out_count = 1;
         return 0;
     }
 
