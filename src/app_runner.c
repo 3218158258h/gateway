@@ -21,17 +21,115 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
 
 /* 默认配置常量 */
-#define Device_Node "/dev/ttyUSB0"                    // 默认串口设备路径
+#define DEFAULT_SERIAL_DEVICE "/dev/ttyUSB0"          // 默认串口设备路径
 #define DEFAULT_CONFIG_FILE "/home/nvidia/gateway/gateway.ini"  // 默认配置文件路径
 #define DEFAULT_DB_PATH "/home/nvidia/gateway/gateway.db"       // 默认数据库路径
+#define MAX_SERIAL_DEVICES ROUTER_MAX_DEVICES
+#define MAX_DEVICE_PATH_LEN 256
 
 /* 全局静态变量 */
-static SerialDevice device;                           // 串口设备实例
+static SerialDevice devices[MAX_SERIAL_DEVICES];      // 串口设备实例数组
 static RouterManager router;                          // 路由管理器实例
 static PersistenceManager persistence;                // 消息持久化管理器实例
 static volatile sig_atomic_t stop_requested = 0;      // 停止请求标志（原子变量）
+
+/**
+ * @brief 去除字符串首尾空白字符
+ */
+static char *trim_whitespace(char *str)
+{
+    if (!str) {
+        return str;
+    }
+    while (*str && isspace((unsigned char)*str)) {
+        str++;
+    }
+    if (*str == '\0') {
+        return str;
+    }
+    char *end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) {
+        *end = '\0';
+        end--;
+    }
+    return str;
+}
+
+/**
+ * @brief 解析逗号分隔的串口设备列表
+ */
+static int parse_serial_device_list(char *list, char out_paths[][MAX_DEVICE_PATH_LEN], int max_count)
+{
+    if (!list || !out_paths || max_count <= 0) {
+        return 0;
+    }
+
+    int count = 0;
+    char *saveptr = NULL;
+    char *token = strtok_r(list, ",", &saveptr);
+    while (token && count < max_count) {
+        char *path = trim_whitespace(token);
+        if (path[0] != '\0') {
+            snprintf(out_paths[count], MAX_DEVICE_PATH_LEN, "%s", path);
+            count++;
+        }
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+    return count;
+}
+
+/**
+ * @brief 从配置文件读取串口设备列表
+ */
+static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_count)
+{
+    if (!out_paths || !out_count) {
+        return -1;
+    }
+
+    snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", DEFAULT_SERIAL_DEVICE);
+    *out_count = 1;
+
+    ConfigManager cfg_mgr;
+    if (config_init(&cfg_mgr, DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
+        log_warn("Failed to load device config, using default device: %s", DEFAULT_SERIAL_DEVICE);
+        return 0;
+    }
+
+    int max_devices = config_get_int(&cfg_mgr, "device", "max_devices", ROUTER_MAX_DEVICES);
+    if (max_devices <= 0) {
+        max_devices = 1;
+    }
+    if (max_devices > ROUTER_MAX_DEVICES) {
+        max_devices = ROUTER_MAX_DEVICES;
+    }
+
+    char serial_devices[CONFIG_MAX_VALUE_LEN];
+    if (config_get_string(&cfg_mgr, "device", "serial_devices", "",
+                          serial_devices, sizeof(serial_devices)) == 0 &&
+        serial_devices[0] != '\0') {
+        int parsed = parse_serial_device_list(serial_devices, out_paths, max_devices);
+        if (parsed > 0) {
+            *out_count = parsed;
+            config_destroy(&cfg_mgr);
+            return 0;
+        }
+    }
+
+    char single_device[MAX_DEVICE_PATH_LEN];
+    config_get_string(&cfg_mgr, "bluetooth", "device",
+                      DEFAULT_SERIAL_DEVICE, single_device, sizeof(single_device));
+    snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s",
+             single_device[0] ? single_device : DEFAULT_SERIAL_DEVICE);
+    *out_count = 1;
+
+    config_destroy(&cfg_mgr);
+    return 0;
+}
 
 /**
  * @brief 填充持久化默认配置
@@ -198,31 +296,67 @@ int app_runner_run()
         }
     }
 
-    // 初始化串口设备
-    if (app_serial_init(&device, Device_Node) != 0) {
-        app_task_close();
-        persistence_close(&persistence);
-        return -1;
-    }
-    
-    // 配置蓝牙BLE Mesh连接类型
-    if (app_bluetooth_setConnectionType(&device) != 0) {
-        app_device_close((Device *)&device);
-        persistence_close(&persistence);
-        app_task_close();
-        return -1;
+    // 从配置加载设备列表并初始化串口设备
+    char device_paths[MAX_SERIAL_DEVICES][MAX_DEVICE_PATH_LEN];
+    int configured_device_count = 0;
+    load_device_config(device_paths, &configured_device_count);
+
+    int initialized_device_count = 0;
+    for (int i = 0; i < configured_device_count; i++) {
+        if (app_serial_init(&devices[i], device_paths[i]) != 0) {
+            log_error("Failed to init serial device: %s", device_paths[i]);
+            for (int j = 0; j < initialized_device_count; j++) {
+                app_device_close((Device *)&devices[j]);
+            }
+            if (persistence.is_initialized) {
+                persistence_close(&persistence);
+            }
+            app_task_close();
+            return -1;
+        }
+
+        if (app_bluetooth_setConnectionType(&devices[i]) != 0) {
+            log_error("Failed to config bluetooth on device: %s", device_paths[i]);
+            app_device_close((Device *)&devices[i]);
+            for (int j = 0; j < initialized_device_count; j++) {
+                app_device_close((Device *)&devices[j]);
+            }
+            if (persistence.is_initialized) {
+                persistence_close(&persistence);
+            }
+            app_task_close();
+            return -1;
+        }
+
+        initialized_device_count++;
     }
 
     // 初始化路由管理器
     if (app_router_init(&router, NULL) != 0) {
-        app_device_close((Device *)&device);
-        persistence_close(&persistence);
+        for (int i = 0; i < initialized_device_count; i++) {
+            app_device_close((Device *)&devices[i]);
+        }
+        if (persistence.is_initialized) {
+            persistence_close(&persistence);
+        }
         app_task_close();
         return -1;
     }
 
     // 注册串口设备到路由管理器
-    app_router_register_device(&router, (Device *)&device);
+    for (int i = 0; i < initialized_device_count; i++) {
+        if (app_router_register_device(&router, (Device *)&devices[i]) != 0) {
+            for (int j = i; j < initialized_device_count; j++) {
+                app_device_close((Device *)&devices[j]);
+            }
+            app_router_close(&router);
+            if (persistence.is_initialized) {
+                persistence_close(&persistence);
+            }
+            app_task_close();
+            return -1;
+        }
+    }
 
     // 注册消息回调函数
     if (persistence.is_initialized) {
@@ -233,6 +367,9 @@ int app_runner_run()
     // 启动路由管理器（连接云端、启动设备）
     if (app_router_start(&router) != 0) {
         app_router_close(&router);
+        if (persistence.is_initialized) {
+            persistence_close(&persistence);
+        }
         app_task_close();
         return -1;
     }

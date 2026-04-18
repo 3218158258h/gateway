@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <sqlite3.h>
 
 /* 数据库建表SQL语句 */
@@ -34,6 +36,65 @@ static const char *SQL_CREATE_TABLE =
 /* 创建索引SQL语句（优化状态查询） */
 static const char *SQL_CREATE_INDEX = 
     "CREATE INDEX IF NOT EXISTS idx_status ON messages(status);";
+
+/**
+ * @brief 递归创建目录（mkdir -p）
+ */
+static int ensure_dir_exists(const char *dir_path)
+{
+    if (!dir_path || dir_path[0] == '\0') {
+        return -1;
+    }
+
+    char path[256];
+    strncpy(path, dir_path, sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+
+    for (char *p = path + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+                return -1;
+            }
+            *p = '/';
+        }
+    }
+
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 确保数据库父目录存在
+ */
+static int ensure_db_parent_dir(const char *db_path)
+{
+    if (!db_path || db_path[0] == '\0') {
+        return -1;
+    }
+
+    const char *slash = strrchr(db_path, '/');
+    if (!slash) {
+        return 0;
+    }
+    if (slash == db_path) {
+        return 0;
+    }
+
+    size_t len = (size_t)(slash - db_path);
+    if (len >= 256) {
+        return -1;
+    }
+
+    char dir_path[256];
+    memcpy(dir_path, db_path, len);
+    dir_path[len] = '\0';
+
+    return ensure_dir_exists(dir_path);
+}
 
 /**
  * @brief 初始化持久化管理器
@@ -62,11 +123,20 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
         manager->config.max_queue_size = 10000;
     }
     
+    if (ensure_db_parent_dir(manager->config.db_path) != 0) {
+        log_error("Failed to ensure db parent dir: %s", manager->config.db_path);
+        return -1;
+    }
+
     sqlite3 *db;
     // 打开数据库文件
     int rc = sqlite3_open(manager->config.db_path, &db);
     if (rc != SQLITE_OK) {
-        log_error("Failed to open database: %s", manager->config.db_path);
+        log_error("Failed to open database: %s, error: %s",
+                  manager->config.db_path, sqlite3_errmsg(db));
+        if (db) {
+            sqlite3_close(db);
+        }
         return -1;
     }
     
