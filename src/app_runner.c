@@ -98,7 +98,9 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_co
 
     int max_devices = config_get_int(&cfg_mgr, "device", "max_devices", ROUTER_MAX_DEVICES);
     if (max_devices <= 0) {
-        max_devices = 1;
+        log_error("Invalid config [device].max_devices: %d", max_devices);
+        config_destroy(&cfg_mgr);
+        return -1;
     }
     if (max_devices > ROUTER_MAX_DEVICES) {
         max_devices = ROUTER_MAX_DEVICES;
@@ -360,7 +362,7 @@ int app_runner_run()
     // 注册串口设备到路由管理器
     for (int i = 0; i < initialized_device_count; i++) {
         if (app_router_register_device(&router, (Device *)&devices[i]) != 0) {
-            for (int j = i; j < initialized_device_count; j++) {
+            for (int j = 0; j < initialized_device_count; j++) {
                 app_device_close((Device *)&devices[j]);
             }
             app_router_close(&router);
