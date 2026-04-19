@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include "../thirdparty/log.c/log.h"
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -290,7 +291,7 @@ int app_device_init(Device *device, char *filename)
     }
 
     // 复制文件名
-    strcpy(device->filename, filename);
+    snprintf(device->filename, strlen(filename) + 1, "%s", filename);
     
     // 打开设备文件（读写模式，不作为控制终端）
     device->fd = open(device->filename, O_RDWR | O_NOCTTY);
@@ -364,14 +365,16 @@ int app_device_start(Device *device)
         return 0;
     }
 
+    device->is_running = 1;
+
     // 创建后台读取线程
-    if (pthread_create(&device->background_thread, NULL, device->vptr->background_task, device) < 0)
+    if (pthread_create(&device->background_thread, NULL, device->vptr->background_task, device) != 0)
     {
+        device->is_running = 0;
         log_error("Failed to create background thread");
         return -1;
     }
-    
-    device->is_running = 1;
+
     log_info("Device %s started", device->filename);
     return 0;
 }

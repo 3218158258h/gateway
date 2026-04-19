@@ -300,7 +300,7 @@ int config_save(ConfigManager *config)
         
         // 写入节名（如果与上一项不同）
         if (strcmp(current_section, item->section) != 0) {
-            strcpy(current_section, item->section);
+            snprintf(current_section, sizeof(current_section), "%s", item->section);
             fprintf(fp, "\n[%s]\n", item->section);
         }
         
@@ -533,7 +533,7 @@ void config_print_all(ConfigManager *config)
         
         // 打印节名（如果与上一项不同）
         if (strcmp(current_section, item->section) != 0) {
-            strcpy(current_section, item->section);
+            snprintf(current_section, sizeof(current_section), "%s", item->section);
             printf("[%s]\n", item->section);
         }
         

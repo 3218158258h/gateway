@@ -46,7 +46,8 @@ static void mqtt_fill_default_config(MqttConfig *config)
 {
     if (!config) return;
     memset(config, 0, sizeof(MqttConfig));
-    strcpy(config->broker_url, "tcp://localhost:1883");
+    snprintf(config->broker_url, sizeof(config->broker_url), "%s", "tcp://localhost:1883");
+    snprintf(config->client_id, sizeof(config->client_id), "%s", "gateway");
     config->keepalive_interval = 60;
     config->clean_session = 1;
     config->default_qos = MQTT_QOS_1;
@@ -317,15 +318,8 @@ int mqtt_init(MqttClient *client, const MqttConfig *config)
     if (config) {
         memcpy(&client->config, config, sizeof(MqttConfig));
     } else {
-        // 使用默认配置
-        strcpy(client->config.broker_url, "tcp://localhost:1883");
-        client->config.keepalive_interval = 60;
-        client->config.clean_session = 1;
-        client->config.default_qos = MQTT_QOS_0;
-        client->config.auto_reconnect = 1;
-        client->config.reconnect_min_interval = 1;    // 最小重连间隔1秒
-        client->config.reconnect_max_interval = 60;   // 最大重连间隔60秒
-        client->config.reconnect_max_attempts = 0;    // 无限重试
+        // 使用统一默认配置
+        mqtt_fill_default_config(&client->config);
     }
     
     // 分配内部结构

@@ -19,6 +19,7 @@
 #include "../thirdparty/log.c/log.h"
 #include "../thirdparty/cJSON/cJSON.h"
 #include <stdlib.h>
+#include <stdio.h>
 
 /**
  * @brief 将十六进制字符转换为数值
@@ -67,7 +68,7 @@ static char *bin_to_str(unsigned char *binary, int len)
     // 逐字节转换为十六进制
     for (int i = 0; i < len; i++)
     {
-        sprintf(hex_str + i * 2, "%02X", binary[i]);
+        snprintf(hex_str + i * 2, 3, "%02X", binary[i]);
     }
     hex_str[len * 2] = '\0';
     return hex_str;

@@ -35,7 +35,6 @@
 typedef struct RuntimeConfig {
     int thread_pool_executors;
     int device_buffer_size;
-    int persistence_max_queue_size;
 } RuntimeConfig;
 
 /* 全局静态变量 */
@@ -134,24 +133,41 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_co
         return -1;
     }
 
-    char single_device[MAX_DEVICE_PATH_LEN];
-    if (config_get_string(&cfg_mgr, "bluetooth", "device",
-                          NULL, single_device, sizeof(single_device)) != 0) {
-        log_error("Missing required config: [bluetooth].device");
+    char single_device[MAX_DEVICE_PATH_LEN] = {0};
+    if (config_get_string(&cfg_mgr, "device", "single_device",
+                          "", single_device, sizeof(single_device)) == 0 &&
+        single_device[0] != '\0') {
+        char *trimmed = trim_whitespace(single_device);
+        if (!trimmed || trimmed[0] == '\0') {
+            log_error("Empty config: [device].single_device");
+            config_destroy(&cfg_mgr);
+            return -1;
+        }
+        snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
+        *out_count = 1;
         config_destroy(&cfg_mgr);
-        return -1;
+        return 0;
     }
-    char *trimmed = trim_whitespace(single_device);
-    if (!trimmed || trimmed[0] == '\0') {
-        log_error("Empty required config: [bluetooth].device");
-        config_destroy(&cfg_mgr);
-        return -1;
-    }
-    snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
-    *out_count = 1;
 
+    if (config_get_string(&cfg_mgr, "bluetooth", "device",
+                          "", single_device, sizeof(single_device)) == 0 &&
+        single_device[0] != '\0') {
+        char *trimmed = trim_whitespace(single_device);
+        if (!trimmed || trimmed[0] == '\0') {
+            log_error("Empty legacy config: [bluetooth].device");
+            config_destroy(&cfg_mgr);
+            return -1;
+        }
+        log_warn("Using legacy fallback [bluetooth].device; prefer [device].serial_devices or [device].single_device");
+        snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
+        *out_count = 1;
+        config_destroy(&cfg_mgr);
+        return 0;
+    }
+
+    log_error("Missing required config: [device].serial_devices or [device].single_device (legacy: [bluetooth].device)");
     config_destroy(&cfg_mgr);
-    return 0;
+    return -1;
 }
 
 /**
@@ -176,7 +192,6 @@ static int load_runtime_config(RuntimeConfig *runtime)
 
     runtime->thread_pool_executors = DEFAULT_TASK_EXECUTORS;
     runtime->device_buffer_size = DEFAULT_DEVICE_BUFFER_SIZE;
-    runtime->persistence_max_queue_size = DEFAULT_PERSIST_QUEUE_SIZE;
 
     ConfigManager cfg_mgr = {0};
     if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0) {
@@ -193,9 +208,6 @@ static int load_runtime_config(RuntimeConfig *runtime)
         &cfg_mgr, "runtime", "thread_pool_executors", DEFAULT_TASK_EXECUTORS);
     runtime->device_buffer_size = config_get_int(
         &cfg_mgr, "device", "buffer_size", DEFAULT_DEVICE_BUFFER_SIZE);
-    runtime->persistence_max_queue_size = config_get_int(
-        &cfg_mgr, "persistence", "max_queue_size", DEFAULT_PERSIST_QUEUE_SIZE);
-
     config_destroy(&cfg_mgr);
 
     if (runtime->thread_pool_executors <= 0) {
@@ -208,16 +220,9 @@ static int load_runtime_config(RuntimeConfig *runtime)
                   runtime->device_buffer_size);
         return -1;
     }
-    if (runtime->persistence_max_queue_size <= 0) {
-        log_error("Invalid config [persistence].max_queue_size: %d",
-                  runtime->persistence_max_queue_size);
-        return -1;
-    }
-
-    log_info("Runtime config loaded: thread_pool_executors=%d, device_buffer_size=%d, persistence_max_queue_size=%d",
+    log_info("Runtime config loaded: thread_pool_executors=%d, device_buffer_size=%d",
              runtime->thread_pool_executors,
-             runtime->device_buffer_size,
-             runtime->persistence_max_queue_size);
+             runtime->device_buffer_size);
     return 0;
 }
 
@@ -375,8 +380,6 @@ int app_runner_run()
         app_task_close();
         return -1;
     }
-    persist_config.max_queue_size = runtime_config.persistence_max_queue_size;
-    
     if (persistence_init(&persistence, &persist_config) != 0) {
         log_warn("Failed to init persistence, continuing without persistence");
     } else {
