@@ -71,3 +71,32 @@ gateway/
 ├── README.md        # 项目说明
 ├── main.c           # 程序入口
 ```
+## 无硬件本地联调（虚拟串口）
+
+可以在虚拟机里用 `socat` 创建多个虚拟设备节点，模拟多个下位机。
+
+1. 创建虚拟节点（示例：3组）
+```bash
+./create_virtual_nodes.sh 3 /tmp/gateway-vdev
+```
+
+2. 把输出的 `gateway_port` 列表填到 `gateway.ini` 的 `[device].serial_devices`（逗号分隔）
+
+3. 启动网关（按你的实际构建产物路径）
+```bash
+./build/bin/gateway app
+```
+
+4. 用脚本模拟下位机发包（写到 `sim` 端）
+```bash
+# 发送10帧，设备ID=0001，数据=01020304
+python3 ./simulate_lower_device.py --port /tmp/gateway-vdev/sim0 --device-id 0001 --payload 01020304 --count 10 --interval 1
+
+# 可选：仅监听并自动回复AT命令ACK（用于初始化阶段）
+python3 ./simulate_lower_device.py --port /tmp/gateway-vdev/sim0 --ack-at --count 0
+```
+
+5. 简单观察数据
+```bash
+cat /tmp/gateway-vdev/gw0 | hexdump -C
+```
