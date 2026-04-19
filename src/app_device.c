@@ -25,6 +25,7 @@
 
 /* 设备缓冲区大小（可通过配置覆盖） */
 #define DEFAULT_BUFFER_LEN 16384
+#define FRAME_HEADER_SIZE 3
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
 
 /**
@@ -129,12 +130,12 @@ static void app_device_defaultRecvTask(void *argv)
     Device *device = argv;
     
     // 检查是否有足够数据读取头部
-    if (device->recv_buffer->len < 3) {
+    if (device->recv_buffer->len < FRAME_HEADER_SIZE) {
         return;
     }
     
     // 先peek头部，不移除数据
-    if (app_buffer_peek(device->recv_buffer, buf, 3) < 3) {
+    if (app_buffer_peek(device->recv_buffer, buf, FRAME_HEADER_SIZE) < FRAME_HEADER_SIZE) {
         return;
     }
     
@@ -144,17 +145,17 @@ static void app_device_defaultRecvTask(void *argv)
     int total_len = id_len + data_len;
     
     // 检查完整消息是否到达
-    if (device->recv_buffer->len < 3 + total_len) {
+    if (device->recv_buffer->len < FRAME_HEADER_SIZE + total_len) {
         return;  // 数据不完整，等待更多数据
     }
     
     // 读取头部（从缓冲区移除）
-    app_buffer_read(device->recv_buffer, buf, 3);
+    app_buffer_read(device->recv_buffer, buf, FRAME_HEADER_SIZE);
     
     // 读取剩余数据（ID + 数据）
-    app_buffer_read(device->recv_buffer, buf + 3, total_len);
+    app_buffer_read(device->recv_buffer, buf + FRAME_HEADER_SIZE, total_len);
     
-    int buf_len = 3 + total_len;
+    int buf_len = FRAME_HEADER_SIZE + total_len;
     
     // 调用接收回调函数（带重试机制）
     if (device->vptr && device->vptr->recv_callback) {
@@ -184,18 +185,18 @@ static void app_device_defaultSendTask(void *argv)
     Device *device = argv;
     
     // 检查是否有足够数据读取头部
-    if (device->send_buffer->len < 3) {
+    if (device->send_buffer->len < FRAME_HEADER_SIZE) {
         return;
     }
     
     // 先窥探头部，避免在数据不完整时破坏帧边界
-    int peek_len = app_buffer_peek(device->send_buffer, buf, 3);
-    if (peek_len != 3) {
+    int peek_len = app_buffer_peek(device->send_buffer, buf, FRAME_HEADER_SIZE);
+    if (peek_len != FRAME_HEADER_SIZE) {
         if (peek_len < 0) {
             log_warn("Failed to peek send buffer header (device send path)");
         } else {
-            log_debug("Insufficient header bytes for send frame validation: got=%d, need=3 (will retry)",
-                      peek_len);
+            log_debug("Insufficient header bytes for send frame validation: got=%d, need=%d (will retry)",
+                      peek_len, FRAME_HEADER_SIZE);
         }
         return;
     }
@@ -203,24 +204,24 @@ static void app_device_defaultSendTask(void *argv)
     int id_len = buf[1];
     int data_len = buf[2];
     int total_len = id_len + data_len;
-    if (total_len < 0 || total_len > ((int)sizeof(buf) - 3)) {
+    if (total_len < 0 || total_len > ((int)sizeof(buf) - FRAME_HEADER_SIZE)) {
         log_error("Invalid send frame length: id_len=%d, data_len=%d", id_len, data_len);
-        app_buffer_read(device->send_buffer, buf, 3);
+        app_buffer_read(device->send_buffer, buf, FRAME_HEADER_SIZE);
         return;
     }
     
     // 检查数据完整性
-    if (device->send_buffer->len < 3 + total_len) {
+    if (device->send_buffer->len < FRAME_HEADER_SIZE + total_len) {
         log_warn("Incomplete send data");
         return;
     }
 
     // 读取完整消息（头部 + 负载）
-    app_buffer_read(device->send_buffer, buf, 3);
+    app_buffer_read(device->send_buffer, buf, FRAME_HEADER_SIZE);
     
     // 读取剩余负载（ID + 数据）
-    app_buffer_read(device->send_buffer, buf + 3, total_len);
-    buf_len = 3 + total_len;
+    app_buffer_read(device->send_buffer, buf + FRAME_HEADER_SIZE, total_len);
+    buf_len = FRAME_HEADER_SIZE + total_len;
 
     // 调用协议层pre_write处理（如蓝牙帧封装）
     if (device->vptr->pre_write)
@@ -259,7 +260,8 @@ int app_device_init(Device *device, char *filename)
     }
     
     // 分配文件名内存
-    device->filename = malloc(strlen(filename) + 1);
+    size_t filename_len = strlen(filename) + 1;
+    device->filename = malloc(filename_len);
     if (!device->filename)
     {
         log_warn("Not enough memory for device %s", filename);
@@ -291,7 +293,7 @@ int app_device_init(Device *device, char *filename)
     }
 
     // 复制文件名
-    snprintf(device->filename, strlen(filename) + 1, "%s", filename);
+    memcpy(device->filename, filename, filename_len);
     
     // 打开设备文件（读写模式，不作为控制终端）
     device->fd = open(device->filename, O_RDWR | O_NOCTTY);

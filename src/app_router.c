@@ -326,14 +326,12 @@ int app_router_init(RouterManager *router, const char *config_file)
     const char *cfg_file = config_file ? config_file : APP_DEFAULT_CONFIG_FILE;
 
     ConfigManager cfg;
-    int cfg_inited = 0;
     int transport_inited = 0;
     int router_message_size = ROUTER_DEFAULT_MESSAGE_SIZE;
     if (config_init(&cfg, cfg_file) != 0) {
         log_error("Failed to load router config file: %s", cfg_file);
         return router_init_fail(router, transport_inited);
     }
-    cfg_inited = 1;
 
     if (config_load(&cfg) != 0) {
         log_error("Failed to load router config file: %s", cfg_file);
@@ -342,7 +340,6 @@ int app_router_init(RouterManager *router, const char *config_file)
     }
     router_message_size = config_get_int(&cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
     config_destroy(&cfg);
-    cfg_inited = 0;
 
     if (router_message_size <= 0) {
         log_error("Invalid config [router].max_message_size: %d", router_message_size);
@@ -362,9 +359,6 @@ int app_router_init(RouterManager *router, const char *config_file)
     transport_on_state_changed(&router->transport, on_transport_state_changed);
     
     /* 设置全局路由管理器指针 */
-    if (cfg_inited) {
-        config_destroy(&cfg);
-    }
     router->is_initialized = 1;
     g_router = router;
     log_info("Router initialized: max_message_size=%d, max_devices=%d",

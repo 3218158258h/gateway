@@ -1,4 +1,5 @@
 #include "../include/app_serial.h"
+#include "../thirdparty/log.c/log.h"
 #include <unistd.h>
 #include <string.h>
 
@@ -75,10 +76,14 @@ int app_serial_setBaudRate(SerialDevice *serial_device, SerialBaudRate baud_rate
         cfsetospeed(&options, B115200);
         break;
     default:
+        log_error("Unsupported baud rate: %d", baud_rate);
+        return -1;
+    }
+    if (app_serial_set_options(serial_device, &options) != 0) {
         return -1;
     }
     serial_device->baud_rate = baud_rate;
-    return app_serial_set_options(serial_device, &options);
+    return 0;
 }
 
 int app_serial_setStopBits(SerialDevice *serial_device, StopBits stop_bits)
