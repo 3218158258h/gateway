@@ -36,7 +36,7 @@
 
 ## 3. 环境准备与依赖
 
-## 3.1 基础依赖（构建/运行）
+### 3.1 基础依赖（构建/运行）
 - gcc / make
 - Python 3
 - sqlite3
@@ -44,7 +44,7 @@
 - Cyclone DDS（DDS 模式下需要 `dds/dds.h` 及相关库）
 - socat（虚拟串口联调）
 
-## 3.2 当前仓库内标准入口
+### 3.2 当前仓库内标准入口
 - 主工程构建：`make`
 - DDS测试构建：`make -C test`
 - 虚拟串口创建：`./create_virtual_nodes.sh`
@@ -56,7 +56,7 @@
 
 ## 4. 本轮基础测试流程（推荐执行顺序）
 
-## Step 1：构建与测试构建基线
+### Step 1：构建与测试构建基线
 1. 执行主工程构建：`make`
 2. 执行测试目录构建：`make -C test`
 
@@ -66,7 +66,7 @@
 
 ---
 
-## Step 2：配置检查（gateway.ini）
+### Step 2：配置检查（gateway.ini）
 重点检查：
 - `[transport].type` 与编译选项是否一致  
   - `type=dds` 时，二进制必须由 `make USE_DDS=1 ...` 构建
@@ -78,7 +78,7 @@
 
 ---
 
-## Step 3：无硬件联调（虚拟串口）
+### Step 3：无硬件联调（虚拟串口）
 1. 创建虚拟串口对（示例3对）  
    `./create_virtual_nodes.sh 3 /tmp/gateway-vdev`
 2. 将输出的 `gw*` 端口写入 `[device].serial_devices`
@@ -100,7 +100,7 @@
 
 ---
 
-## Step 4：基础通信测试（MQTT / DDS）
+### Step 4：基础通信测试（MQTT / DDS）
 
 ### 4.1 MQTT 基础收发
 前置：
@@ -126,7 +126,7 @@
 
 ---
 
-## Step 5：持久化与可观察性
+### Step 5：持久化与可观察性
 1. 执行：`python3 read_gateway_db.py --limit 20`
 2. 核对 `messages` 表是否按预期落库/状态更新
 
