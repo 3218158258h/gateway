@@ -324,10 +324,10 @@ int ota_init(OtaManager *manager, const OtaConfig *config)
         memcpy(&manager->config, config, sizeof(OtaConfig));
     } else {
         // 使用默认配置
-        strcpy(manager->config.partition_a, OTA_CONFIG_PARTITION_A);      // A分区设备
-        strcpy(manager->config.partition_b, OTA_CONFIG_PARTITION_B);      // B分区设备
-        strcpy(manager->config.boot_config, OTA_CONFIG_FILE); // 启动配置文件
-        strcpy(manager->config.public_key_path, OTA_CONFIG_PUBLIC_KEY); // 公钥路径
+        snprintf(manager->config.partition_a, sizeof(manager->config.partition_a), "%s", OTA_CONFIG_PARTITION_A);      // A分区设备
+        snprintf(manager->config.partition_b, sizeof(manager->config.partition_b), "%s", OTA_CONFIG_PARTITION_B);      // B分区设备
+        snprintf(manager->config.boot_config, sizeof(manager->config.boot_config), "%s", OTA_CONFIG_FILE); // 启动配置文件
+        snprintf(manager->config.public_key_path, sizeof(manager->config.public_key_path), "%s", OTA_CONFIG_PUBLIC_KEY); // 公钥路径
         manager->config.check_interval = 86400;    // 检查间隔：24小时
         manager->config.max_boot_attempts = 3;     // 最大启动尝试次数
         manager->config.auto_rollback = 1;         // 启用自动回滚

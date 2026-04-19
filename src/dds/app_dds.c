@@ -175,7 +175,7 @@ int dds_init(DdsManager *manager, const DdsConfig *config)
         memcpy(&manager->config, config, sizeof(DdsConfig));
     } else {
         manager->config.domain_id = 0;
-        strcpy(manager->config.participant_name, "gateway");
+        snprintf(manager->config.participant_name, sizeof(manager->config.participant_name), "%s", "gateway");
         manager->config.default_qos = dds_qos_default();
         manager->config.auto_discovery = 1;
     }
@@ -231,7 +231,7 @@ int dds_init_default(DdsManager *manager, int domain_id)
         .domain_id = domain_id,
         .auto_discovery = 1
     };
-    strcpy(config.participant_name, "gateway");
+    snprintf(config.participant_name, sizeof(config.participant_name), "%s", "gateway");
     config.default_qos = dds_qos_default();
     
     return dds_init(manager, &config);

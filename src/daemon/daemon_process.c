@@ -32,7 +32,8 @@ int daemon_process_init(SubProcess *subprocess, const char *name)
     memset(subprocess->args, 0, sizeof(char *) * 3);
     
     // 为子进程名称分配内存（长度=名称长度+1，存储字符串结束符'\0'）
-    subprocess->name = malloc(strlen(name) + 1);
+    size_t name_len = strlen(name) + 1;
+    subprocess->name = malloc(name_len);
     if (subprocess->name == NULL)
     {
         log_error("Failed to allocate memory for subprocess name");
@@ -43,7 +44,7 @@ int daemon_process_init(SubProcess *subprocess, const char *name)
     }
 
     // 将子进程名称拷贝到分配的内存中
-    strcpy(subprocess->name, name);
+    memcpy(subprocess->name, name, name_len);
     // 初始化PID为-1，表示子进程未运行
     subprocess->pid = -1;
 
