@@ -97,7 +97,8 @@ static int parse_int_arg(const char *s, int *out)
     if (!s || !out) return -1;
     errno = 0;
     parsed_value = strtol(s, &end, 10);
-    if (errno != 0 || end == s || *end != '\0' || parsed_value < INT_MIN || parsed_value > INT_MAX) {
+    if (errno != 0 || end == s || *end != '\0' ||
+        parsed_value < (long)INT_MIN || parsed_value > (long)INT_MAX) {
         return -1;
     }
     *out = (int)parsed_value;
@@ -194,7 +195,7 @@ int main(int argc, char *argv[])
     int connection_type = 2;
     const char *device_id_arg = "0001";
     int type_seq[32];
-    int type_seq_len = 0;
+    size_t type_seq_len = 0;
     const char *type_seq_arg = NULL;
 
     for (int i = 1; i < argc; i++) {
@@ -243,11 +244,12 @@ int main(int argc, char *argv[])
         return -1;
     }
     if (type_seq_arg) {
-        type_seq_len = parse_type_sequence(type_seq_arg, type_seq, (int)(sizeof(type_seq) / sizeof(type_seq[0])));
-        if (type_seq_len < 0) {
+        int parsed_type_seq_len = parse_type_sequence(type_seq_arg, type_seq, (int)(sizeof(type_seq) / sizeof(type_seq[0])));
+        if (parsed_type_seq_len < 0) {
             fprintf(stderr, "Invalid --type-seq: %s\n", type_seq_arg);
             return -1;
         }
+        type_seq_len = (size_t)parsed_type_seq_len;
     }
 
     signal(SIGINT, handle_signal);
@@ -294,7 +296,7 @@ int main(int argc, char *argv[])
     while (!g_stop && (count == 0 || sent < count)) {
         char json_buf[4096];
         unsigned char payload[4];
-        int current_type = (type_seq_len > 0) ? type_seq[sent % (uint32_t)type_seq_len] : connection_type;
+        int current_type = (type_seq_len > 0) ? type_seq[sent % type_seq_len] : connection_type;
         payload[0] = (unsigned char)((seq >> 24) & 0xFF);
         payload[1] = (unsigned char)((seq >> 16) & 0xFF);
         payload[2] = (unsigned char)((seq >> 8) & 0xFF);
