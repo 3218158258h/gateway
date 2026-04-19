@@ -15,6 +15,23 @@
 #include "../thirdparty/log.c/log.h"
 
 /**
+ * @brief 从环形缓冲区指定起点复制数据（支持回绕）
+ */
+static void app_buffer_copy_from_ring(const Buffer *buffer, int start, void *buf, int len)
+{
+    unsigned char *out = (unsigned char *)buf;
+    if (start + len <= buffer->size)
+    {
+        memcpy(out, buffer->ptr + start, len);
+        return;
+    }
+
+    int first_len = buffer->size - start;
+    memcpy(out, buffer->ptr + start, first_len);
+    memcpy(out + first_len, buffer->ptr, len - first_len);
+}
+
+/**
  * @brief 初始化环形缓冲区
  * 
  * 分配指定大小的内存并初始化互斥锁。
@@ -51,8 +68,6 @@ int app_buffer_init(Buffer *buffer, int size)
     buffer->start = 0;      // 数据起始位置
     buffer->len = 0;        // 当前数据长度
     
-    log_debug("Buffer %p created", buffer);
-
     return 0;
 }
 
@@ -90,28 +105,14 @@ int app_buffer_read(Buffer *buffer, void *buf, int len)
         return 0;
     }
 
-    // 处理两种情况：连续读取和回绕读取
-    if (buffer->start + len <= buffer->size)
-    {
-        // 情况1：数据连续，无需回绕
-        memcpy(buf, buffer->ptr + buffer->start, len);
-        buffer->start += len;
-    }
-    else
-    {
-        // 情况2：数据跨越缓冲区末尾，需要分两段读取
-        int first_len = buffer->size - buffer->start;  // 第一段长度
-        memcpy(buf, buffer->ptr + buffer->start, first_len);           // 读取第一段
-        memcpy(buf + first_len, buffer->ptr, len - first_len);         // 读取第二段（从头部开始）
-        buffer->start = len - first_len;  // 更新读指针
-    }
+    app_buffer_copy_from_ring(buffer, buffer->start, buf, len);
+    buffer->start = (buffer->start + len) % buffer->size;
     
     // 更新数据长度
     buffer->len -= len;
 
     pthread_mutex_unlock(&buffer->lock);
     
-    log_trace("Buffer status after read: start %d, len %d", buffer->start, buffer->len);
     return len;
 }
 
@@ -148,19 +149,7 @@ int app_buffer_peek(Buffer *buffer, void *buf, int len)
         return 0;
     }
 
-    // 处理两种情况：连续窥探和回绕窥探
-    if (buffer->start + len <= buffer->size)
-    {
-        // 情况1：数据连续，无需回绕
-        memcpy(buf, buffer->ptr + buffer->start, len);
-    }
-    else
-    {
-        // 情况2：数据跨越缓冲区末尾，需要分两段读取
-        int first_len = buffer->size - buffer->start;
-        memcpy(buf, buffer->ptr + buffer->start, first_len);
-        memcpy(buf + first_len, buffer->ptr, len - first_len);
-    }
+    app_buffer_copy_from_ring(buffer, buffer->start, buf, len);
     
     // 注意：不更新start和len，保持原状态
 
@@ -224,7 +213,6 @@ int app_buffer_write(Buffer *buffer, void *buf, int len)
     
     pthread_mutex_unlock(&buffer->lock);
     
-    log_trace("Buffer status after write: start %d, len %d", buffer->start, buffer->len);
     return 0;
 }
 

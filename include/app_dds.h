@@ -68,7 +68,7 @@ typedef enum {
 typedef struct DdsManager {
     DdsConfig config;
     DdsState state;
-    void *participant;          /* DomainParticipant */
+    void *participant;          /* 域参与者对象 */
     void *publisher;
     void *subscriber;
     int is_initialized;
@@ -186,6 +186,12 @@ DdsState dds_get_state(DdsManager *manager);
  * @return 1可用, 0不可用
  */
 int dds_is_enabled(DdsManager *manager);
+
+/**
+ * @brief 检查当前二进制是否编译了DDS支持
+ * @return 1已编译DDS支持, 0未编译
+ */
+int dds_is_compiled_enabled(void);
 
 /* ========== 工具函数 ========== */
 

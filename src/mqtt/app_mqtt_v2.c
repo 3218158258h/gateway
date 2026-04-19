@@ -29,7 +29,7 @@
  * 存储MQTT客户端的内部状态和资源。
  */
 typedef struct {
-    MQTTClient mqtt_client;         // Paho MQTT客户端句柄
+    MQTTClient mqtt_client;         // MQTT客户端句柄
     pthread_t thread;               // 后台线程
     int running;                    // 运行标志
     pthread_mutex_t lock;           // 状态锁
@@ -38,6 +38,24 @@ typedef struct {
     int reconnect_delay;            // 当前重连延迟（秒）
     time_t last_reconnect_time;     // 上次重连尝试时间
 } MqttInternal;
+
+/**
+ * @brief 填充MQTT默认配置
+ */
+static void mqtt_fill_default_config(MqttConfig *config)
+{
+    if (!config) return;
+    memset(config, 0, sizeof(MqttConfig));
+    snprintf(config->broker_url, sizeof(config->broker_url), "%s", "tcp://localhost:1883");
+    snprintf(config->client_id, sizeof(config->client_id), "%s", "gateway");
+    config->keepalive_interval = 60;
+    config->clean_session = 1;
+    config->default_qos = MQTT_QOS_1;
+    config->auto_reconnect = 1;
+    config->reconnect_min_interval = 1;
+    config->reconnect_max_interval = 60;
+    config->reconnect_max_attempts = 0;
+}
 
 /**
  * @brief 连接丢失回调
@@ -300,15 +318,8 @@ int mqtt_init(MqttClient *client, const MqttConfig *config)
     if (config) {
         memcpy(&client->config, config, sizeof(MqttConfig));
     } else {
-        // 使用默认配置
-        strcpy(client->config.broker_url, "tcp://localhost:1883");
-        client->config.keepalive_interval = 60;
-        client->config.clean_session = 1;
-        client->config.default_qos = MQTT_QOS_0;
-        client->config.auto_reconnect = 1;
-        client->config.reconnect_min_interval = 1;    // 最小重连间隔1秒
-        client->config.reconnect_max_interval = 60;   // 最大重连间隔60秒
-        client->config.reconnect_max_attempts = 0;    // 无限重试
+        // 使用统一默认配置
+        mqtt_fill_default_config(&client->config);
     }
     
     // 分配内部结构
@@ -352,29 +363,21 @@ int mqtt_init(MqttClient *client, const MqttConfig *config)
  */
 int mqtt_init_default(MqttClient *client, const char *broker_url, const char *client_id)
 {
-    MqttConfig config = {0};
+    MqttConfig config;
+    mqtt_fill_default_config(&config);
     
     // 设置Broker地址
     if (broker_url) {
         strncpy(config.broker_url, broker_url, sizeof(config.broker_url) - 1);
-    } else {
-        strcpy(config.broker_url, "tcp://localhost:1883");
+        config.broker_url[sizeof(config.broker_url) - 1] = '\0';
     }
     
     // 设置客户端ID
     if (client_id) {
         strncpy(config.client_id, client_id, sizeof(config.client_id) - 1);
+        config.client_id[sizeof(config.client_id) - 1] = '\0';
     }
-    
-    // 默认配置
-    config.keepalive_interval = 60;
-    config.clean_session = 1;
-    config.default_qos = MQTT_QOS_1;
-    config.auto_reconnect = 1;
-    config.reconnect_min_interval = 1;
-    config.reconnect_max_interval = 60;
-    config.reconnect_max_attempts = 0;
-    
+
     return mqtt_init(client, &config);
 }
 
@@ -580,7 +583,7 @@ int mqtt_publish(MqttClient *client, const char *topic,
     int rc = MQTTClient_publishMessage(internal->mqtt_client, topic, &pubmsg, &token);
     
     if (rc == MQTTCLIENT_SUCCESS) {
-        // QoS > 0时等待交付完成
+        // 服务质量等级大于0时等待交付完成
         if (qos > MQTT_QOS_0) {
             MQTTClient_waitForCompletion(internal->mqtt_client, token, 5000);
         }

@@ -36,7 +36,7 @@ typedef enum {
 
 /* MQTT配置 */
 typedef struct MqttConfig {
-    char broker_url[256];           /* Broker地址: tcp://host:port */
+    char broker_url[256];           /* MQTT服务器地址: tcp://主机:端口 */
     char client_id[128];            /* 客户端ID */
     char username[128];             /* 用户名(可选) */
     char password[128];             /* 密码(可选) */

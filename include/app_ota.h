@@ -71,17 +71,17 @@ typedef struct OtaConfig {
 
 /* OTA管理器 */
 typedef struct OtaManager {
-    OtaConfig config;// OTA配置
-    OtaState state;// OTA状态
-    OtaPartition partition_a;// A分区信息
-    OtaPartition partition_b;// B分区信息
-    OtaPartition *active_partition;// 当前活动分区指针
+    OtaConfig config;                // OTA配置
+    OtaState state;                  // OTA状态
+    OtaPartition partition_a;        // A分区信息
+    OtaPartition partition_b;        // B分区信息
+    OtaPartition *active_partition;  // 当前活动分区指针
     OtaPartition *inactive_partition;// 当前非活动分区指针
     
-    char current_version[32];// 当前版本号
-    char new_version[32];// 新版本号
-    int download_progress;// 下载进度(0-100)
-    int is_initialized;// 是否初始化
+    char current_version[32];        // 当前版本号
+    char new_version[32];            // 新版本号
+    int download_progress;           // 下载进度(0-100)
+    int is_initialized;              // 是否初始化
     
     /* 回调 */
     void (*on_state_changed)(struct OtaManager *manager, OtaState state);

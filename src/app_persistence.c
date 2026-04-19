@@ -15,7 +15,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <sqlite3.h>
+
+#define PERSISTENCE_MAX_PATH_LEN 256
+#define PERSISTENCE_DEFAULT_DB_PATH "gateway.db"
+#define PERSISTENCE_DEFAULT_MAX_RETRY_COUNT 3
+#define PERSISTENCE_DEFAULT_EXPIRE_HOURS 24
+#define PERSISTENCE_DEFAULT_MAX_QUEUE_SIZE 10000
 
 /* 数据库建表SQL语句 */
 static const char *SQL_CREATE_TABLE = 
@@ -24,7 +32,7 @@ static const char *SQL_CREATE_TABLE =
     "topic TEXT NOT NULL,"                       // 消息主题
     "payload BLOB NOT NULL,"                     // 消息内容（二进制）
     "payload_len INTEGER NOT NULL,"              // 消息长度
-    "qos INTEGER DEFAULT 0,"                     // QoS级别
+    "qos INTEGER DEFAULT 0,"                     // 服务质量级别
     "status INTEGER DEFAULT 0,"                  // 消息状态
     "retry_count INTEGER DEFAULT 0,"             // 重试次数
     "create_time INTEGER NOT NULL,"              // 创建时间
@@ -34,6 +42,79 @@ static const char *SQL_CREATE_TABLE =
 /* 创建索引SQL语句（优化状态查询） */
 static const char *SQL_CREATE_INDEX = 
     "CREATE INDEX IF NOT EXISTS idx_status ON messages(status);";
+
+/**
+ * @brief 递归创建目录（mkdir -p）
+ */
+static int ensure_dir_exists(const char *dir_path)
+{
+    if (!dir_path || dir_path[0] == '\0') {
+        return -1;
+    }
+
+    char path[PERSISTENCE_MAX_PATH_LEN];
+    snprintf(path, sizeof(path), "%s", dir_path);
+
+    char *iter = (path[0] == '/') ? (path + 1) : path;
+    for (char *p = iter; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+                return -1;
+            }
+            *p = '/';
+        }
+    }
+
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 确保数据库父目录存在
+ */
+static int ensure_db_parent_dir(const char *db_path)
+{
+    if (!db_path || db_path[0] == '\0') {
+        return -1;
+    }
+
+    const char *slash = strrchr(db_path, '/');
+    if (!slash) {
+        return 0;
+    }
+    if (slash == db_path) {
+        return 0;
+    }
+
+    size_t len = (size_t)(slash - db_path);
+    if (len >= PERSISTENCE_MAX_PATH_LEN) {
+        return -1;
+    }
+
+    char dir_path[PERSISTENCE_MAX_PATH_LEN];
+    memcpy(dir_path, db_path, len);
+    dir_path[len] = '\0';
+
+    return ensure_dir_exists(dir_path);
+}
+
+/**
+ * @brief 填充持久化默认配置
+ */
+static void fill_default_persistence_config(PersistenceConfig *config)
+{
+    if (!config) {
+        return;
+    }
+    snprintf(config->db_path, sizeof(config->db_path), "%s", PERSISTENCE_DEFAULT_DB_PATH);
+    config->max_retry_count = PERSISTENCE_DEFAULT_MAX_RETRY_COUNT;
+    config->message_expire_hours = PERSISTENCE_DEFAULT_EXPIRE_HOURS;
+    config->max_queue_size = PERSISTENCE_DEFAULT_MAX_QUEUE_SIZE;
+}
 
 /**
  * @brief 初始化持久化管理器
@@ -56,17 +137,23 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
         memcpy(&manager->config, config, sizeof(PersistenceConfig));
     } else {
         // 使用默认配置
-        strcpy(manager->config.db_path, "/home/nvidia/gateway/gateway.db");
-        manager->config.max_retry_count = 3;
-        manager->config.message_expire_hours = 24;
-        manager->config.max_queue_size = 10000;
+        fill_default_persistence_config(&manager->config);
     }
     
+    if (ensure_db_parent_dir(manager->config.db_path) != 0) {
+        log_error("Failed to ensure db parent dir: %s", manager->config.db_path);
+        return -1;
+    }
+
     sqlite3 *db;
     // 打开数据库文件
     int rc = sqlite3_open(manager->config.db_path, &db);
     if (rc != SQLITE_OK) {
-        log_error("Failed to open database: %s", manager->config.db_path);
+        log_error("Failed to open database: %s, error: %s",
+                  manager->config.db_path, sqlite3_errmsg(db));
+        if (db) {
+            sqlite3_close(db);
+        }
         return -1;
     }
     
@@ -109,16 +196,13 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
 int persistence_init_default(PersistenceManager *manager, const char *db_path)
 {
     PersistenceConfig config = {0};
+    fill_default_persistence_config(&config);
     
     // 设置数据库路径
-    if (db_path) {
+    if (db_path && db_path[0] != '\0') {
         strncpy(config.db_path, db_path, sizeof(config.db_path) - 1);
-    } else {
-        strcpy(config.db_path, "/home/nvidia/gateway/gateway.db");
+        config.db_path[sizeof(config.db_path) - 1] = '\0';
     }
-    config.max_retry_count = 3;
-    config.message_expire_hours = 24;
-    config.max_queue_size = 10000;
     
     return persistence_init(manager, &config);
 }
@@ -183,7 +267,7 @@ int persistence_save(PersistenceManager *manager, const char *topic,
     sqlite3_bind_text(stmt, 1, topic, -1, SQLITE_STATIC);           // 主题
     sqlite3_bind_blob(stmt, 2, payload, len, SQLITE_TRANSIENT);     // 内容
     sqlite3_bind_int(stmt, 3, len);                                  // 长度
-    sqlite3_bind_int(stmt, 4, qos);                                  // QoS
+    sqlite3_bind_int(stmt, 4, qos);                                  // 服务质量
     sqlite3_bind_int64(stmt, 5, now);                                // 创建时间
     sqlite3_bind_int64(stmt, 6, now);                                // 更新时间
     
@@ -205,7 +289,7 @@ int persistence_save(PersistenceManager *manager, const char *topic,
     
     sqlite3_finalize(stmt);
     
-    log_debug("Message saved: id=%llu, topic=%s, len=%zu", 
+    log_trace("Message saved: id=%llu, topic=%s, len=%zu", 
               (unsigned long long)id, topic, len);
     return 0;
 }

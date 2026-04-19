@@ -38,16 +38,47 @@ typedef struct TaskQueue
 {
     struct TaskStruct *head;      // 队列头指针
     struct TaskStruct *tail;      // 队列尾指针
-    int count;                    // 队列中任务数量
 } TaskQueue;
 
 /* 全局静态变量 */
 static pthread_t *executor_ptr = NULL;      // 工作线程数组
 static int executors_count = 0;             // 工作线程数量
-static TaskQueue task_queue = {NULL, NULL, 0};  // 任务队列
+static TaskQueue task_queue = {NULL, NULL};     // 任务队列
 static pthread_mutex_t queue_lock;          // 队列互斥锁
 static pthread_cond_t queue_cond;           // 队列条件变量
 static int is_initialized = 0;              // 初始化标志
+
+/**
+ * @brief 广播停止并唤醒所有等待线程
+ */
+static void app_task_broadcast_stop(void)
+{
+    pthread_mutex_lock(&queue_lock);
+    pthread_cond_broadcast(&queue_cond);
+    pthread_mutex_unlock(&queue_lock);
+}
+
+/**
+ * @brief 清理已创建的执行线程
+ */
+static void app_task_cleanup_executors(int created_count)
+{
+    for (int i = 0; i < created_count; i++) {
+        if (executor_ptr[i]) {
+            pthread_cancel(executor_ptr[i]);
+            pthread_join(executor_ptr[i], NULL);
+        }
+    }
+}
+
+/**
+ * @brief 销毁任务管理器同步原语
+ */
+static void app_task_destroy_sync_primitives(void)
+{
+    pthread_mutex_destroy(&queue_lock);
+    pthread_cond_destroy(&queue_cond);
+}
 
 /**
  * @brief 初始化任务队列
@@ -58,7 +89,6 @@ static void task_queue_init(TaskQueue *queue)
 {
     queue->head = NULL;
     queue->tail = NULL;
-    queue->count = 0;
 }
 
 /**
@@ -84,7 +114,6 @@ static int task_queue_push(TaskQueue *queue, struct TaskStruct *task)
         queue->tail = task;
     }
     
-    queue->count++;
     return 0;
 }
 
@@ -106,7 +135,6 @@ static struct TaskStruct* task_queue_pop(TaskQueue *queue)
         queue->tail = NULL;
     }
     
-    queue->count--;
     return task;
 }
 
@@ -139,7 +167,6 @@ static void task_queue_clear(TaskQueue *queue)
     
     queue->head = NULL;
     queue->tail = NULL;
-    queue->count = 0;
 }
 
 /**
@@ -151,7 +178,7 @@ static void task_queue_clear(TaskQueue *queue)
  */
 static void cleanup_handler(void *arg)
 {
-    log_info("Executor %d cleaned up", *(int*)arg);
+    log_debug("Executor %d cleaned up", *(int*)arg);
 }
 
 /**
@@ -167,7 +194,6 @@ static void *app_task_executor(void *argv)
 {
     int executor_id = *(int*)argv;
     free(argv);
-    log_info("Executor %d started", executor_id);
 
     int id = executor_id;
     pthread_cleanup_push(cleanup_handler, &id);
@@ -191,7 +217,6 @@ static void *app_task_executor(void *argv)
         // 检查停止信号
         if (task_should_stop) {
             pthread_mutex_unlock(&queue_lock);
-            log_info("Executor %d received stop signal", executor_id);
             break;
         }
         
@@ -216,7 +241,6 @@ static void *app_task_executor(void *argv)
     }
 
     pthread_cleanup_pop(1);
-    log_info("Executor %d exited", executor_id);
     return NULL;
 }
 
@@ -246,16 +270,14 @@ int app_task_init(int executors)
     // 检查是否已初始化
     if (is_initialized || executor_ptr != NULL || executors_count > 0) {
         log_error("Task manager already initialized");
-        pthread_mutex_destroy(&queue_lock);
-        pthread_cond_destroy(&queue_cond);
+        app_task_destroy_sync_primitives();
         return -1;
     }
 
     // 检查线程数量参数
     if (executors <= 0) {
         log_error("Invalid executors count: %d", executors);
-        pthread_mutex_destroy(&queue_lock);
-        pthread_cond_destroy(&queue_cond);
+        app_task_destroy_sync_primitives();
         return -1;
     }
 
@@ -263,8 +285,7 @@ int app_task_init(int executors)
     executors_count = executors;
     executor_ptr = malloc(executors_count * sizeof(pthread_t));
     if (!executor_ptr) {
-        pthread_mutex_destroy(&queue_lock);
-        pthread_cond_destroy(&queue_cond);
+        app_task_destroy_sync_primitives();
         executors_count = 0;
         return -1;
     }
@@ -291,26 +312,23 @@ int app_task_init(int executors)
 
     is_initialized = 1;
     task_should_stop = 0;
-    log_info("Task manager started with %d executors (queue mode)", executors_count);
+    log_info("Task manager init result: requested=%d, created=%d, missing=0",
+             executors, executors_count);
     return 0;
 
 THREAD_EXIT:
-    // 清理已创建的线程
-    for (int j = 0; j < i; j++) {
-        if (executor_ptr[j]) {
-            pthread_cancel(executor_ptr[j]);
-            pthread_join(executor_ptr[j], NULL);
-        }
-    }
+    int requested = executors_count;
+    int created = i;
+    app_task_cleanup_executors(created);
 
     // 清理资源
     free(executor_ptr);
     executor_ptr = NULL;
-    pthread_mutex_destroy(&queue_lock);
-    pthread_cond_destroy(&queue_cond);
+    app_task_destroy_sync_primitives();
     executors_count = 0;
 
-    log_error("Task manager initialization failed");
+    log_error("Task manager init failed: requested=%d, created=%d, missing=%d",
+              requested, created, requested - created);
     return -1;
 }
 
@@ -367,11 +385,7 @@ int app_task_register(Task task, void *args)
 void app_task_signal_stop(void)
 {
     task_should_stop = 1;
-    
-    // 唤醒所有等待的工作线程
-    pthread_mutex_lock(&queue_lock);
-    pthread_cond_broadcast(&queue_cond);
-    pthread_mutex_unlock(&queue_lock);
+    app_task_broadcast_stop();
 }
 
 /**
@@ -400,12 +414,7 @@ void app_task_close(void)
     }
 
     // 发送停止信号
-    task_should_stop = 1;
-    
-    // 唤醒所有等待的线程
-    pthread_mutex_lock(&queue_lock);
-    pthread_cond_broadcast(&queue_lock);
-    pthread_mutex_unlock(&queue_lock);
+    app_task_signal_stop();
 
     // 等待所有工作线程退出
     for (int i = 0; i < executors_count; i++) {
@@ -426,8 +435,7 @@ void app_task_close(void)
     pthread_mutex_unlock(&queue_lock);
 
     // 销毁同步原语
-    pthread_mutex_destroy(&queue_lock);
-    pthread_cond_destroy(&queue_cond);
+    app_task_destroy_sync_primitives();
 
     executors_count = 0;
     is_initialized = 0;

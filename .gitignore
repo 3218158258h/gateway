@@ -1,0 +1,10 @@
+build/
+test/subscriber
+test/publisher
+*.o
+*.a
+*.so
+
+# Python cache
+__pycache__/
+*.pyc

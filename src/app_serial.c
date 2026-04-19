@@ -1,32 +1,43 @@
 #include "../include/app_serial.h"
+#include "../thirdparty/log.c/log.h"
 #include <unistd.h>
 #include <string.h>
 
-static int app_serial_setCS8(SerialDevice *serial_device)
+static int app_serial_get_options(SerialDevice *serial_device, struct termios *options)
 {
-    struct termios options;
-    if (tcgetattr(serial_device->super.fd, &options) != 0)
-    {
+    if (!serial_device || !options) return -1;
+    if (tcgetattr(serial_device->super.fd, options) != 0) {
         return -1;
     }
+    return 0;
+}
 
+static int app_serial_set_options(SerialDevice *serial_device, struct termios *options)
+{
+    if (!serial_device || !options) return -1;
+    if (tcsetattr(serial_device->super.fd, TCSAFLUSH, options) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int app_serial_setCS8(SerialDevice *serial_device)
+{
+    if (!serial_device) return -1;
+    struct termios options;
+    if (app_serial_get_options(serial_device, &options) != 0) return -1;
     options.c_cflag &= ~CSIZE;
     options.c_cflag |= CS8;
-
-    return tcsetattr(serial_device->super.fd, TCSAFLUSH, &options);
+    return app_serial_set_options(serial_device, &options);
 }
 
 static int app_serial_setRaw(SerialDevice *serial_device)
 {
+    if (!serial_device) return -1;
     struct termios options;
-    if (tcgetattr(serial_device->super.fd, &options) != 0)
-    {
-        return -1;
-    }
-
+    if (app_serial_get_options(serial_device, &options) != 0) return -1;
     cfmakeraw(&options);
-
-    return tcsetattr(serial_device->super.fd, TCSAFLUSH, &options);
+    return app_serial_set_options(serial_device, &options);
 }
 
 int app_serial_init(SerialDevice *serial_device, char *filename)
@@ -51,14 +62,8 @@ int app_serial_init(SerialDevice *serial_device, char *filename)
 int app_serial_setBaudRate(SerialDevice *serial_device, SerialBaudRate baud_rate)
 {
     if (!serial_device) return -1;
-    
     struct termios options;
-    if (tcgetattr(serial_device->super.fd, &options) != 0)
-    {
-        return -1;
-    }
-
-    serial_device->baud_rate = baud_rate;
+    if (app_serial_get_options(serial_device, &options) != 0) return -1;
 
     switch (baud_rate)
     {
@@ -71,46 +76,36 @@ int app_serial_setBaudRate(SerialDevice *serial_device, SerialBaudRate baud_rate
         cfsetospeed(&options, B115200);
         break;
     default:
-        break;
+        log_error("Unsupported baud rate: %d", baud_rate);
+        return -1;
     }
-
-    return tcsetattr(serial_device->super.fd, TCSAFLUSH, &options);
+    if (app_serial_set_options(serial_device, &options) != 0) {
+        return -1;
+    }
+    serial_device->baud_rate = baud_rate;
+    return 0;
 }
 
 int app_serial_setStopBits(SerialDevice *serial_device, StopBits stop_bits)
 {
     if (!serial_device) return -1;
-    
     struct termios options;
-    if (tcgetattr(serial_device->super.fd, &options) != 0)
-    {
-        return -1;
-    }
-
-    serial_device->stop_bits = stop_bits;
-
+    if (app_serial_get_options(serial_device, &options) != 0) return -1;
     options.c_cflag &= ~CSTOPB;
     options.c_cflag |= stop_bits;
-
-    return tcsetattr(serial_device->super.fd, TCSAFLUSH, &options);
+    serial_device->stop_bits = stop_bits;
+    return app_serial_set_options(serial_device, &options);
 }
 
 int app_serial_setParity(SerialDevice *serial_device, Parity parity)
 {
     if (!serial_device) return -1;
-    
     struct termios options;
-    if (tcgetattr(serial_device->super.fd, &options) != 0)
-    {
-        return -1;
-    }
-
-    serial_device->parity = parity;
-
+    if (app_serial_get_options(serial_device, &options) != 0) return -1;
     options.c_cflag &= ~(PARENB | PARODD);
     options.c_cflag |= parity;
-
-    return tcsetattr(serial_device->super.fd, TCSAFLUSH, &options);
+    serial_device->parity = parity;
+    return app_serial_set_options(serial_device, &options);
 }
 
 int app_serial_flush(SerialDevice *serial_device)
@@ -122,12 +117,8 @@ int app_serial_flush(SerialDevice *serial_device)
 int app_serial_setBlockMode(SerialDevice *serial_device, int block_mode)
 {
     if (!serial_device) return -1;
-    
     struct termios options;
-    if (tcgetattr(serial_device->super.fd, &options) != 0)
-    {
-        return -1;
-    }
+    if (app_serial_get_options(serial_device, &options) != 0) return -1;
 
     if (block_mode)
     {
@@ -136,10 +127,10 @@ int app_serial_setBlockMode(SerialDevice *serial_device, int block_mode)
     }
     else
     {
-        // VTIME unit is 0.1 seconds, so VTIME=5 means 0.5 seconds
+        // VTIME单位为0.1秒，因此VTIME=5表示0.5秒
         options.c_cc[VTIME] = 5;
         options.c_cc[VMIN] = 0;
     }
 
-    return tcsetattr(serial_device->super.fd, TCSAFLUSH, &options);
+    return app_serial_set_options(serial_device, &options);
 }

@@ -52,7 +52,7 @@ OTA_SRCS = $(SRC_DIR)/ota/app_ota.c
 # 第三方库源文件
 THIRDPARTY_SRCS = thirdparty/cJSON/cJSON.c \
                   thirdparty/log.c/log.c \
-				  thirdparty/sqlite3/sqlite3.h
+				  thirdparty/sqlite3/sqlite3.c
 
 # 主程序
 MAIN_SRC = $(SRC_DIR)/main.c

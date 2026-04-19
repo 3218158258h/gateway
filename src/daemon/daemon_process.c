@@ -32,7 +32,8 @@ int daemon_process_init(SubProcess *subprocess, const char *name)
     memset(subprocess->args, 0, sizeof(char *) * 3);
     
     // 为子进程名称分配内存（长度=名称长度+1，存储字符串结束符'\0'）
-    subprocess->name = malloc(strlen(name) + 1);
+    size_t name_len = strlen(name) + 1;
+    subprocess->name = malloc(name_len);
     if (subprocess->name == NULL)
     {
         log_error("Failed to allocate memory for subprocess name");
@@ -43,14 +44,14 @@ int daemon_process_init(SubProcess *subprocess, const char *name)
     }
 
     // 将子进程名称拷贝到分配的内存中
-    strcpy(subprocess->name, name);
+    memcpy(subprocess->name, name, name_len);
     // 初始化PID为-1，表示子进程未运行
     subprocess->pid = -1;
 
     // 构造子进程启动参数：
-    // args[0] = 可执行程序名（全局宏PROGRAM_NAME）
-    // args[1] = 子进程名称（如"app"）
-    // args[2] = NULL，符合execve函数参数格式要求
+    // 参数数组第0项为可执行程序名（全局宏PROGRAM_NAME）
+    // 参数数组第1项为子进程名称（如"app"）
+    // 参数数组第2项为NULL，符合execve函数参数格式要求
     subprocess->args[0] = PROGRAM_NAME;
     subprocess->args[1] = subprocess->name;
     subprocess->args[2] = NULL;
@@ -70,7 +71,7 @@ int daemon_process_start(SubProcess *subprocess)
     
     // 记录启动子进程的日志
     log_info("Starting subprocess %s", subprocess->name);
-    // fork创建子进程：父进程返回子进程PID，子进程返回0，失败返回-1
+    // 创建子进程：父进程返回子进程PID，子进程返回0，失败返回-1
     subprocess->pid = fork();
     if (subprocess->pid < 0)
     {

@@ -21,7 +21,7 @@
 #ifdef USE_CYCLONE_DDS
 #include <dds/dds.h>
 #define DDS_ENABLED 1
-#include "GatewayData.h"  // IDL生成的数据类型
+#include "GatewayData.h"  // 接口描述语言生成的数据类型
 #define MAX_DATA_LEN 4096
 #else
 #define DDS_ENABLED 0
@@ -35,7 +35,7 @@
 typedef struct DdsTopicInfo {
     char name[128];           // 话题名称
     char type_name[64];       // 数据类型名称
-    DdsQosPolicy qos;         // QoS策略
+    DdsQosPolicy qos;         // 服务质量策略
 #ifdef USE_CYCLONE_DDS
     dds_entity_t topic;       // 话题实体
     dds_entity_t writer;      // 写入器实体
@@ -98,6 +98,15 @@ DdsQosPolicy dds_qos_reliable(void)
         .lifespan_ms = 60000   // 生命周期60秒
     };
     return qos;
+}
+
+int dds_is_compiled_enabled(void)
+{
+#if DDS_ENABLED
+    return 1;
+#else
+    return 0;
+#endif
 }
 
 /**
@@ -175,7 +184,7 @@ int dds_init(DdsManager *manager, const DdsConfig *config)
         memcpy(&manager->config, config, sizeof(DdsConfig));
     } else {
         manager->config.domain_id = 0;
-        strcpy(manager->config.participant_name, "gateway");
+        snprintf(manager->config.participant_name, sizeof(manager->config.participant_name), "%s", "gateway");
         manager->config.default_qos = dds_qos_default();
         manager->config.auto_discovery = 1;
     }
@@ -231,7 +240,7 @@ int dds_init_default(DdsManager *manager, int domain_id)
         .domain_id = domain_id,
         .auto_discovery = 1
     };
-    strcpy(config.participant_name, "gateway");
+    snprintf(config.participant_name, sizeof(config.participant_name), "%s", "gateway");
     config.default_qos = dds_qos_default();
     
     return dds_init(manager, &config);
@@ -455,11 +464,11 @@ int dds_publish(DdsManager *manager, const char *topic_name,
         return -1;
     }
     
-    log_debug("DDS published to %s: %zu bytes", topic_name, len);
+    log_trace("DDS published to %s: %zu bytes", topic_name, len);
     return 0;
 #else
     // DDS未启用时的桩函数
-    log_debug("DDS publish (stub): topic=%s, len=%zu", topic_name, len);
+    log_trace("DDS publish (stub): topic=%s, len=%zu", topic_name, len);
     return 0;
 #endif
 }
@@ -504,7 +513,7 @@ static void on_dds_data_available(dds_entity_t reader, void *arg)
     if (n > 0 && infos[0].valid_data) {
         const char *topic_name = find_topic_name_by_reader(manager, reader);
         
-        log_debug("DDS received from %s: %u bytes", topic_name, msg.length);
+        log_info("DDS received from %s: %u bytes", topic_name, msg.length);
         
         // 调用用户注册的回调函数
         if (manager->on_data_available) {

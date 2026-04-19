@@ -14,15 +14,55 @@
 #include <stdlib.h>
 #include "../thirdparty/log.c/log.h"
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <time.h>
+#include <errno.h>
 
-/* 缓冲区大小常量 */
-#define BUFFER_LEN 16384  // 16KB
+/* 设备缓冲区大小（可通过配置覆盖） */
+#define DEFAULT_BUFFER_LEN 16384
+#define FRAME_HEADER_SIZE 3
+#define DEVICE_BUFFER_COUNT 2
+static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
+
+/**
+ * @brief 关闭设备文件描述符并重置为-1
+ */
+static void app_device_close_fd(Device *device)
+{
+    if (device && device->fd >= 0) {
+        close(device->fd);
+        device->fd = -1;
+    }
+}
+
+/**
+ * @brief 释放设备缓冲区资源
+ */
+static void app_device_release_buffer(Buffer **buffer)
+{
+    if (buffer && *buffer) {
+        app_buffer_close(*buffer);
+        free(*buffer);
+        *buffer = NULL;
+    }
+}
+
+void app_device_set_buffer_size(int size)
+{
+    if (size > 0) {
+        g_device_buffer_len = size;
+    }
+}
+
+int app_device_get_buffer_size(void)
+{
+    return g_device_buffer_len;
+}
 
 /**
  * @brief 设备后台读取任务
@@ -91,32 +131,32 @@ static void app_device_defaultRecvTask(void *argv)
     Device *device = argv;
     
     // 检查是否有足够数据读取头部
-    if (device->recv_buffer->len < 3) {
+    if (device->recv_buffer->len < FRAME_HEADER_SIZE) {
         return;
     }
     
     // 先peek头部，不移除数据
-    if (app_buffer_peek(device->recv_buffer, buf, 3) < 3) {
+    if (app_buffer_peek(device->recv_buffer, buf, FRAME_HEADER_SIZE) < FRAME_HEADER_SIZE) {
         return;
     }
     
     // 解析消息头
-    int id_len = buf[1];      // ID长度
+    int id_len = buf[1];      // 设备标识长度
     int data_len = buf[2];    // 数据长度
     int total_len = id_len + data_len;
     
     // 检查完整消息是否到达
-    if (device->recv_buffer->len < 3 + total_len) {
+    if (device->recv_buffer->len < FRAME_HEADER_SIZE + total_len) {
         return;  // 数据不完整，等待更多数据
     }
     
     // 读取头部（从缓冲区移除）
-    app_buffer_read(device->recv_buffer, buf, 3);
+    app_buffer_read(device->recv_buffer, buf, FRAME_HEADER_SIZE);
     
     // 读取剩余数据（ID + 数据）
-    app_buffer_read(device->recv_buffer, buf + 3, total_len);
+    app_buffer_read(device->recv_buffer, buf + FRAME_HEADER_SIZE, total_len);
     
-    int buf_len = 3 + total_len;
+    int buf_len = FRAME_HEADER_SIZE + total_len;
     
     // 调用接收回调函数（带重试机制）
     if (device->vptr && device->vptr->recv_callback) {
@@ -146,25 +186,43 @@ static void app_device_defaultSendTask(void *argv)
     Device *device = argv;
     
     // 检查是否有足够数据读取头部
-    if (device->send_buffer->len < 3) {
+    if (device->send_buffer->len < FRAME_HEADER_SIZE) {
         return;
     }
     
-    // 读取消息头
-    app_buffer_read(device->send_buffer, buf, 3);
+    // 先窥探头部，避免在数据不完整时破坏帧边界
+    int peek_len = app_buffer_peek(device->send_buffer, buf, FRAME_HEADER_SIZE);
+    if (peek_len != FRAME_HEADER_SIZE) {
+        if (peek_len < 0) {
+            log_warn("Failed to peek send buffer header (device send path)");
+        } else {
+            log_debug("Insufficient header bytes for send frame validation: got=%d, need=%d (will retry)",
+                      peek_len, FRAME_HEADER_SIZE);
+        }
+        return;
+    }
     
     int id_len = buf[1];
     int data_len = buf[2];
-    
-    // 检查数据完整性
-    if (device->send_buffer->len < id_len + data_len) {
-        log_warn("Incomplete send data");
+    int total_len = id_len + data_len;
+    if (total_len < 0 || total_len > ((int)sizeof(buf) - FRAME_HEADER_SIZE)) {
+        log_error("Invalid send frame length: id_len=%d, data_len=%d", id_len, data_len);
+        app_buffer_read(device->send_buffer, buf, FRAME_HEADER_SIZE);
         return;
     }
     
-    // 读取完整消息
-    app_buffer_read(device->send_buffer, buf + 3, id_len + data_len);
-    buf_len = 3 + id_len + data_len;
+    // 检查数据完整性
+    if (device->send_buffer->len < FRAME_HEADER_SIZE + total_len) {
+        log_warn("Incomplete send data");
+        return;
+    }
+
+    // 读取完整消息（头部 + 负载）
+    app_buffer_read(device->send_buffer, buf, FRAME_HEADER_SIZE);
+    
+    // 读取剩余负载（ID + 数据）
+    app_buffer_read(device->send_buffer, buf + FRAME_HEADER_SIZE, total_len);
+    buf_len = FRAME_HEADER_SIZE + total_len;
 
     // 调用协议层pre_write处理（如蓝牙帧封装）
     if (device->vptr->pre_write)
@@ -175,7 +233,14 @@ static void app_device_defaultSendTask(void *argv)
     // 写入设备文件描述符
     if (buf_len > 0)
     {
-        write(device->fd, buf, buf_len);
+        ssize_t written = write(device->fd, buf, buf_len);
+        if (written < 0) {
+            log_error("Device write failed for %s: %s",
+                      device->filename ? device->filename : "(unknown)",
+                      strerror(errno));
+        } else if (written != buf_len) {
+            log_warn("Partial device write: %zd/%d", written, buf_len);
+        }
     }
 }
 
@@ -196,7 +261,8 @@ int app_device_init(Device *device, char *filename)
     }
     
     // 分配文件名内存
-    device->filename = malloc(strlen(filename) + 1);
+    size_t filename_len = strlen(filename) + 1;
+    device->filename = malloc(filename_len);
     if (!device->filename)
     {
         log_warn("Not enough memory for device %s", filename);
@@ -228,7 +294,7 @@ int app_device_init(Device *device, char *filename)
     }
 
     // 复制文件名
-    strcpy(device->filename, filename);
+    memcpy(device->filename, filename, filename_len);
     
     // 打开设备文件（读写模式，不作为控制终端）
     device->fd = open(device->filename, O_RDWR | O_NOCTTY);
@@ -242,17 +308,18 @@ int app_device_init(Device *device, char *filename)
     device->connection_type = CONNECTION_TYPE_NONE;
     
     // 初始化接收缓冲区
-    if (app_buffer_init(device->recv_buffer, BUFFER_LEN) < 0)
+    if (app_buffer_init(device->recv_buffer, g_device_buffer_len) < 0)
     {
+        log_error("Device %s buffer creation failed: index=1/%d", device->filename, DEVICE_BUFFER_COUNT);
         goto DEVICE_OPEN_FAIL;
     }
     
     // 初始化发送缓冲区
-    if (app_buffer_init(device->send_buffer, BUFFER_LEN) < 0)
+    if (app_buffer_init(device->send_buffer, g_device_buffer_len) < 0)
     {
+        log_error("Device %s buffer creation failed: index=2/%d", device->filename, DEVICE_BUFFER_COUNT);
         goto DEVICE_RECV_INIT_FAIL;
     }
-    
     device->is_running = 0;
 
     // 设置默认虚函数
@@ -263,7 +330,7 @@ int app_device_init(Device *device, char *filename)
     device->vptr->post_read = NULL;    // 读后处理（由子类实现）
     device->vptr->recv_callback = NULL; // 接收回调（由上层注册）
 
-    log_info("Device %s initialized", device->filename);
+    log_info("Device %s initialized (buffer_size=%d)", device->filename, g_device_buffer_len);
 
     return 0;
 
@@ -271,7 +338,7 @@ int app_device_init(Device *device, char *filename)
 DEVICE_RECV_INIT_FAIL:
     app_buffer_close(device->recv_buffer);
 DEVICE_OPEN_FAIL:
-    close(device->fd);
+    app_device_close_fd(device);
 DEVICE_SEND_BUFFER_EXIT:
     free(device->send_buffer);
 DEVICE_RECV_BUFFER_EXIT:
@@ -302,14 +369,16 @@ int app_device_start(Device *device)
         return 0;
     }
 
+    device->is_running = 1;
+
     // 创建后台读取线程
-    if (pthread_create(&device->background_thread, NULL, device->vptr->background_task, device) < 0)
+    if (pthread_create(&device->background_thread, NULL, device->vptr->background_task, device) != 0)
     {
+        device->is_running = 0;
         log_error("Failed to create background thread");
         return -1;
     }
-    
-    device->is_running = 1;
+
     log_info("Device %s started", device->filename);
     return 0;
 }
@@ -374,10 +443,7 @@ void app_device_stop(Device *device)
         device->is_running = 0;
         
         // 关闭文件描述符（会触发read返回）
-        if (device->fd >= 0) {
-            close(device->fd);
-            device->fd = -1;
-        }
+        app_device_close_fd(device);
         
         // 设置2秒超时等待线程退出
         struct timespec ts;
@@ -408,24 +474,13 @@ void app_device_close(Device *device)
     app_device_stop(device);
     
     // 释放发送缓冲区
-    if (device->send_buffer) {
-        app_buffer_close(device->send_buffer);
-        free(device->send_buffer);
-        device->send_buffer = NULL;
-    }
+    app_device_release_buffer(&device->send_buffer);
     
     // 释放接收缓冲区
-    if (device->recv_buffer) {
-        app_buffer_close(device->recv_buffer);
-        free(device->recv_buffer);
-        device->recv_buffer = NULL;
-    }
+    app_device_release_buffer(&device->recv_buffer);
     
     // 关闭文件描述符
-    if (device->fd >= 0) {
-        close(device->fd);
-        device->fd = -1;
-    }
+    app_device_close_fd(device);
     
     // 释放虚函数表
     if (device->vptr) {

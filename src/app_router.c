@@ -19,13 +19,25 @@
 #include <pthread.h>
 
 /* 默认配置常量 */
-#define DEFAULT_CONFIG_FILE "/home/nvidia/gateway/gateway.ini"  /* 默认配置文件路径 */
-#define DEFAULT_MAX_DEVICES 32                                    /* 默认最大设备数量 */
-#define MAX_MESSAGE_SIZE    4096                                  /* 最大消息大小 */
+#define ROUTER_DEFAULT_MESSAGE_SIZE 4096                          /* 默认消息缓冲区大小 */
 
 /* 全局路由管理器实例（用于单例模式） */
 static RouterManager g_router_instance;
 static RouterManager *g_router = NULL;
+
+/**
+ * @brief 路由初始化失败统一清理
+ */
+static int router_init_fail(RouterManager *router, int transport_initialized)
+{
+    if (!router) return -1;
+    if (transport_initialized) {
+        transport_close(&router->transport);
+    }
+    pthread_mutex_destroy(&router->lock);
+    memset(router, 0, sizeof(RouterManager));
+    return -1;
+}
 
 /**
  * @brief 根据连接类型查找设备
@@ -147,12 +159,13 @@ static void on_transport_message(TransportManager *transport, const char *topic,
     if (!router || !data || len == 0) return;
     
     /* 分配消息缓冲区 */
-    unsigned char *buf = malloc(MAX_MESSAGE_SIZE);
+    int max_message_size = (router->max_message_size > 0) ? router->max_message_size : ROUTER_DEFAULT_MESSAGE_SIZE;
+    unsigned char *buf = malloc((size_t)max_message_size);
     if (!buf) return;
     
     /* 将JSON格式转换为二进制格式 */
     int buf_len = json_to_binary_safe((const char *)data, (int)len,
-                                       buf, MAX_MESSAGE_SIZE);
+                                       buf, max_message_size);
     if (buf_len < 0) {
         free(buf);
         return;
@@ -241,12 +254,13 @@ static int on_device_message(void *ptr, int len)
     
     RouterManager *router = g_router;
     
+    int max_message_size = (router->max_message_size > 0) ? router->max_message_size : ROUTER_DEFAULT_MESSAGE_SIZE;
     /* 分配JSON缓冲区 */
-    char *buf = malloc(MAX_MESSAGE_SIZE);
+    char *buf = malloc((size_t)max_message_size);
     if (!buf) return -1;
     
     /* 将二进制格式转换为JSON格式 */
-    int json_len = binary_to_json_safe(ptr, len, buf, MAX_MESSAGE_SIZE);
+    int json_len = binary_to_json_safe(ptr, len, buf, max_message_size);
     if (json_len < 0) {
         free(buf);
         return -1;
@@ -307,34 +321,48 @@ int app_router_init(RouterManager *router, const char *config_file)
     /* 初始化设备计数和状态 */
     router->device_count = 0;
     router->state = ROUTER_STATE_STOPPED;
-    router->is_initialized = 1;
+    router->is_initialized = 0;
     
-    const char *cfg_file = config_file ? config_file : DEFAULT_CONFIG_FILE;
+    const char *cfg_file = config_file ? config_file : APP_DEFAULT_CONFIG_FILE;
+
+    ConfigManager cfg;
+    int transport_inited = 0;
+    int router_message_size = ROUTER_DEFAULT_MESSAGE_SIZE;
+    if (config_init(&cfg, cfg_file) != 0) {
+        log_error("Failed to load router config file: %s", cfg_file);
+        return router_init_fail(router, transport_inited);
+    }
+
+    if (config_load(&cfg) != 0) {
+        log_error("Failed to load router config file: %s", cfg_file);
+        config_destroy(&cfg);
+        return router_init_fail(router, transport_inited);
+    }
+    router_message_size = config_get_int(&cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
+    config_destroy(&cfg);
+
+    if (router_message_size <= 0) {
+        log_error("Invalid config [router].max_message_size: %d", router_message_size);
+        return router_init_fail(router, transport_inited);
+    }
+    router->max_message_size = router_message_size;
     
     /* 从配置文件初始化传输层 */
     if (transport_init_from_config(&router->transport, cfg_file) != 0) {
-        /* 配置文件初始化失败，使用默认配置 */
-        TransportConfig tconfig;
-        memset(&tconfig, 0, sizeof(TransportConfig));
-        tconfig.type = TRANSPORT_TYPE_MQTT;
-        strncpy(tconfig.mqtt_broker, "tcp://localhost:1883", sizeof(tconfig.mqtt_broker) - 1);
-        strncpy(tconfig.mqtt_client_id, "gateway", sizeof(tconfig.mqtt_client_id) - 1);
-        tconfig.mqtt_keepalive = 60;
-        tconfig.dds_domain_id = 0;
-        tconfig.default_qos = 1;
-        
-        if (transport_init(&router->transport, &tconfig) != 0) {
-            pthread_mutex_destroy(&router->lock);
-            return -1;
-        }
+        log_error("Failed to initialize transport from config file: %s", cfg_file);
+        return router_init_fail(router, transport_inited);
     }
+    transport_inited = 1;
     
     /* 注册传输层回调函数 */
     transport_on_message(&router->transport, on_transport_message);
     transport_on_state_changed(&router->transport, on_transport_state_changed);
     
     /* 设置全局路由管理器指针 */
+    router->is_initialized = 1;
     g_router = router;
+    log_info("Router initialized: max_message_size=%d, max_devices=%d",
+             router->max_message_size, ROUTER_MAX_DEVICES);
     
     return 0;
 }

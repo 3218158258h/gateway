@@ -19,17 +19,212 @@
 #include "../thirdparty/log.c/log.h"
 
 #include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
 
 /* 默认配置常量 */
-#define Device_Node "/dev/ttyUSB0"                    // 默认串口设备路径
-#define DEFAULT_CONFIG_FILE "/home/nvidia/gateway/gateway.ini"  // 默认配置文件路径
-#define DEFAULT_DB_PATH "/home/nvidia/gateway/gateway.db"       // 默认数据库路径
+#define DEFAULT_DB_PATH "gateway.db"                             // 默认数据库路径
+#define MAX_SERIAL_DEVICES ROUTER_MAX_DEVICES
+#define MAX_DEVICE_PATH_LEN 256
+#define DEFAULT_TASK_EXECUTORS 5
+#define DEFAULT_PERSIST_QUEUE_SIZE 10000
+#define DEFAULT_DEVICE_BUFFER_SIZE 16384
+
+typedef struct RuntimeConfig {
+    int thread_pool_executors;
+    int device_buffer_size;
+} RuntimeConfig;
 
 /* 全局静态变量 */
-static SerialDevice device;                           // 串口设备实例
+static SerialDevice devices[MAX_SERIAL_DEVICES];      // 串口设备实例数组
 static RouterManager router;                          // 路由管理器实例
 static PersistenceManager persistence;                // 消息持久化管理器实例
 static volatile sig_atomic_t stop_requested = 0;      // 停止请求标志（原子变量）
+
+/**
+ * @brief 去除字符串首尾空白字符
+ */
+static char *trim_whitespace(char *str)
+{
+    if (!str) {
+        return str;
+    }
+    while (*str && isspace((unsigned char)*str)) {
+        str++;
+    }
+    if (*str == '\0') {
+        return str;
+    }
+    char *end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) {
+        *end = '\0';
+        end--;
+    }
+    return str;
+}
+
+/**
+ * @brief 解析逗号分隔的串口设备列表
+ */
+static int parse_serial_device_list(char *list, char out_paths[][MAX_DEVICE_PATH_LEN], int max_count)
+{
+    if (!list || !out_paths || max_count <= 0) {
+        return 0;
+    }
+
+    int count = 0;
+    char *saveptr = NULL;
+    char *token = strtok_r(list, ",", &saveptr);
+    while (token && count < max_count) {
+        char *path = trim_whitespace(token);
+        if (path[0] != '\0') {
+            snprintf(out_paths[count], MAX_DEVICE_PATH_LEN, "%s", path);
+            count++;
+        }
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+    return count;
+}
+
+/**
+ * @brief 从配置文件读取串口设备列表
+ */
+static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_count)
+{
+    if (!out_paths || !out_count) {
+        return -1;
+    }
+    
+    ConfigManager cfg_mgr = {0};
+    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0) {
+        log_error("Failed to load device config file: %s", APP_DEFAULT_CONFIG_FILE);
+        return -1;
+    }
+    if (config_load(&cfg_mgr) != 0) {
+        log_error("Failed to load device config file: %s", APP_DEFAULT_CONFIG_FILE);
+        config_destroy(&cfg_mgr);
+        return -1;
+    }
+
+    int max_devices = config_get_int(&cfg_mgr, "device", "max_devices", ROUTER_MAX_DEVICES);
+    if (max_devices <= 0) {
+        log_error("Invalid config [device].max_devices: %d", max_devices);
+        config_destroy(&cfg_mgr);
+        return -1;
+    }
+    if (max_devices > ROUTER_MAX_DEVICES) {
+        max_devices = ROUTER_MAX_DEVICES;
+    }
+
+    char serial_devices[CONFIG_MAX_VALUE_LEN];
+    if (config_get_string(&cfg_mgr, "device", "serial_devices", "",
+                          serial_devices, sizeof(serial_devices)) == 0 &&
+        serial_devices[0] != '\0') {
+        int parsed = parse_serial_device_list(serial_devices, out_paths, max_devices);
+        if (parsed > 0) {
+            *out_count = parsed;
+            config_destroy(&cfg_mgr);
+            return 0;
+        }
+        log_error("Invalid [device].serial_devices: %s", serial_devices);
+        config_destroy(&cfg_mgr);
+        return -1;
+    }
+
+    char single_device[MAX_DEVICE_PATH_LEN] = {0};
+    if (config_get_string(&cfg_mgr, "device", "single_device",
+                          "", single_device, sizeof(single_device)) == 0 &&
+        single_device[0] != '\0') {
+        char *trimmed = trim_whitespace(single_device);
+        if (!trimmed || trimmed[0] == '\0') {
+            log_error("Empty config: [device].single_device");
+            config_destroy(&cfg_mgr);
+            return -1;
+        }
+        snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
+        *out_count = 1;
+        config_destroy(&cfg_mgr);
+        return 0;
+    }
+
+    if (config_get_string(&cfg_mgr, "bluetooth", "device",
+                          "", single_device, sizeof(single_device)) == 0 &&
+        single_device[0] != '\0') {
+        char *trimmed = trim_whitespace(single_device);
+        if (!trimmed || trimmed[0] == '\0') {
+            log_error("Empty legacy config: [bluetooth].device");
+            config_destroy(&cfg_mgr);
+            return -1;
+        }
+        log_warn("Using legacy fallback [bluetooth].device; prefer [device].serial_devices or [device].single_device");
+        snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
+        *out_count = 1;
+        config_destroy(&cfg_mgr);
+        return 0;
+    }
+
+    log_error("Missing required config: [device].serial_devices or [device].single_device (legacy: [bluetooth].device)");
+    config_destroy(&cfg_mgr);
+    return -1;
+}
+
+/**
+ * @brief 填充持久化默认配置
+ */
+static void load_default_persistence_config(PersistenceConfig *config)
+{
+    if (!config) {
+        return;
+    }
+    snprintf(config->db_path, sizeof(config->db_path), "%s", DEFAULT_DB_PATH);
+    config->max_retry_count = 3;
+    config->message_expire_hours = 24;
+    config->max_queue_size = DEFAULT_PERSIST_QUEUE_SIZE;
+}
+
+static int load_runtime_config(RuntimeConfig *runtime)
+{
+    if (!runtime) {
+        return -1;
+    }
+
+    runtime->thread_pool_executors = DEFAULT_TASK_EXECUTORS;
+    runtime->device_buffer_size = DEFAULT_DEVICE_BUFFER_SIZE;
+
+    ConfigManager cfg_mgr = {0};
+    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0) {
+        log_error("Failed to load runtime config file: %s", APP_DEFAULT_CONFIG_FILE);
+        return -1;
+    }
+    if (config_load(&cfg_mgr) != 0) {
+        log_error("Failed to load runtime config file: %s", APP_DEFAULT_CONFIG_FILE);
+        config_destroy(&cfg_mgr);
+        return -1;
+    }
+
+    runtime->thread_pool_executors = config_get_int(
+        &cfg_mgr, "runtime", "thread_pool_executors", DEFAULT_TASK_EXECUTORS);
+    runtime->device_buffer_size = config_get_int(
+        &cfg_mgr, "device", "buffer_size", DEFAULT_DEVICE_BUFFER_SIZE);
+    config_destroy(&cfg_mgr);
+
+    if (runtime->thread_pool_executors <= 0) {
+        log_error("Invalid config [runtime].thread_pool_executors: %d",
+                  runtime->thread_pool_executors);
+        return -1;
+    }
+    if (runtime->device_buffer_size <= 0) {
+        log_error("Invalid config [device].buffer_size: %d",
+                  runtime->device_buffer_size);
+        return -1;
+    }
+    log_info("Runtime config loaded: thread_pool_executors=%d, device_buffer_size=%d",
+             runtime->thread_pool_executors,
+             runtime->device_buffer_size);
+    return 0;
+}
 
 /**
  * @brief 信号处理函数
@@ -59,37 +254,30 @@ static void app_runner_signal_handler(int sig)
  */
 static int load_persistence_config(PersistenceConfig *config, const char *config_file)
 {
-    ConfigManager cfg_mgr;
+    if (!config || !config_file) {
+        return -1;
+    }
+
+    load_default_persistence_config(config);
+
+    ConfigManager cfg_mgr = {0};
     
     // 初始化配置管理器
     if (config_init(&cfg_mgr, config_file) != 0) {
         log_warn("Failed to load config file, using defaults");
-        // 使用默认配置
-        strcpy(config->db_path, DEFAULT_DB_PATH);
-        config->max_retry_count = 3;
-        config->message_expire_hours = 24;
-        config->max_queue_size = 10000;
         return 0;
     }
     
     // 加载配置文件
     if (config_load(&cfg_mgr) != 0) {
         log_warn("Failed to load config file, using defaults");
-        strcpy(config->db_path, DEFAULT_DB_PATH);
-        config->max_retry_count = 3;
-        config->message_expire_hours = 24;
-        config->max_queue_size = 10000;
+        config_destroy(&cfg_mgr);
         return 0;
     }
     
     // 读取数据库路径配置
-    char db_path[256];
-    if (config_get_string(&cfg_mgr, "persistence", "db_path", 
-                  DEFAULT_DB_PATH, db_path, sizeof(db_path)) == 0) {
-        strncpy(config->db_path, db_path, sizeof(config->db_path) - 1);
-    } else {
-        strcpy(config->db_path, DEFAULT_DB_PATH);
-    }
+    config_get_string(&cfg_mgr, "persistence", "db_path",
+                      DEFAULT_DB_PATH, config->db_path, sizeof(config->db_path));
     
     // 读取最大重试次数
     config->max_retry_count = config_get_int(&cfg_mgr, "persistence", "max_retry", 3);
@@ -98,7 +286,13 @@ static int load_persistence_config(PersistenceConfig *config, const char *config
     config->message_expire_hours = config_get_int(&cfg_mgr, "persistence", "expire_hours", 24);
     
     // 设置最大队列大小
-    config->max_queue_size = 10000;
+    config->max_queue_size = config_get_int(&cfg_mgr, "persistence", "max_queue_size",
+                                            DEFAULT_PERSIST_QUEUE_SIZE);
+    if (config->max_queue_size <= 0) {
+        log_error("Invalid config [persistence].max_queue_size: %d", config->max_queue_size);
+        config_destroy(&cfg_mgr);
+        return -1;
+    }
     
     // 销毁配置管理器
     config_destroy(&cfg_mgr);
@@ -119,10 +313,12 @@ static int load_persistence_config(PersistenceConfig *config, const char *config
 static void on_device_message_persist(RouterManager *router, Device *device,
                                        const void *data, size_t len)
 {
+    (void)router;
+    (void)device;
     // 保存消息到数据库
     uint64_t msg_id;
     if (persistence_save(&persistence, "GatewayData", data, len, 1, &msg_id) == 0) {
-        log_debug("Message persisted: id=%llu", (unsigned long long)msg_id);
+        log_trace("Message persisted: id=%llu", (unsigned long long)msg_id);
     }
 }
 
@@ -140,6 +336,8 @@ static void on_device_message_persist(RouterManager *router, Device *device,
 static void on_cloud_message_log(RouterManager *router, const char *topic,
                                   const void *data, size_t len)
 {
+    (void)router;
+    (void)data;
     log_info("Received command from cloud: topic=%s, len=%zu", topic, len);
 }
 
@@ -165,15 +363,23 @@ int app_runner_run()
     signal(SIGINT, app_runner_signal_handler);
     signal(SIGTERM, app_runner_signal_handler);
 
-    // 初始化线程池（5个工作线程）
-    if (app_task_init(5) != 0) {
+    RuntimeConfig runtime_config;
+    if (load_runtime_config(&runtime_config) != 0) {
+        return -1;
+    }
+    app_device_set_buffer_size(runtime_config.device_buffer_size);
+
+    // 初始化线程池
+    if (app_task_init(runtime_config.thread_pool_executors) != 0) {
         return -1;
     }
 
     // 初始化持久化模块
     PersistenceConfig persist_config;
-    load_persistence_config(&persist_config, DEFAULT_CONFIG_FILE);
-    
+    if (load_persistence_config(&persist_config, APP_DEFAULT_CONFIG_FILE) != 0) {
+        app_task_close();
+        return -1;
+    }
     if (persistence_init(&persistence, &persist_config) != 0) {
         log_warn("Failed to init persistence, continuing without persistence");
     } else {
@@ -185,31 +391,77 @@ int app_runner_run()
         }
     }
 
-    // 初始化串口设备
-    if (app_serial_init(&device, Device_Node) != 0) {
+    // 从配置加载设备列表并初始化串口设备
+    char device_paths[MAX_SERIAL_DEVICES][MAX_DEVICE_PATH_LEN];
+    int configured_device_count = 0;
+    if (load_device_config(device_paths, &configured_device_count) != 0) {
+        if (persistence.is_initialized) {
+            persistence_close(&persistence);
+        }
         app_task_close();
-        persistence_close(&persistence);
         return -1;
     }
-    
-    // 配置蓝牙BLE Mesh连接类型
-    if (app_bluetooth_setConnectionType(&device) != 0) {
-        app_device_close((Device *)&device);
-        persistence_close(&persistence);
-        app_task_close();
-        return -1;
+    log_info("Startup summary: configured_device_count=%d, device_buffer_size=%d, persistence_queue_size=%d",
+             configured_device_count,
+             app_device_get_buffer_size(),
+             persist_config.max_queue_size);
+
+    int initialized_device_count = 0;
+    for (int i = 0; i < configured_device_count; i++) {
+        if (app_serial_init(&devices[i], device_paths[i]) != 0) {
+            log_error("Failed to init serial device: %s", device_paths[i]);
+            for (int j = 0; j < initialized_device_count; j++) {
+                app_device_close((Device *)&devices[j]);
+            }
+            if (persistence.is_initialized) {
+                persistence_close(&persistence);
+            }
+            app_task_close();
+            return -1;
+        }
+
+        if (app_bluetooth_setConnectionType(&devices[i]) != 0) {
+            log_error("Failed to config bluetooth on device: %s", device_paths[i]);
+            app_device_close((Device *)&devices[i]);
+            for (int j = 0; j < initialized_device_count; j++) {
+                app_device_close((Device *)&devices[j]);
+            }
+            if (persistence.is_initialized) {
+                persistence_close(&persistence);
+            }
+            app_task_close();
+            return -1;
+        }
+
+        initialized_device_count++;
     }
 
     // 初始化路由管理器
     if (app_router_init(&router, NULL) != 0) {
-        app_device_close((Device *)&device);
-        persistence_close(&persistence);
+        for (int i = 0; i < initialized_device_count; i++) {
+            app_device_close((Device *)&devices[i]);
+        }
+        if (persistence.is_initialized) {
+            persistence_close(&persistence);
+        }
         app_task_close();
         return -1;
     }
 
     // 注册串口设备到路由管理器
-    app_router_register_device(&router, (Device *)&device);
+    for (int i = 0; i < initialized_device_count; i++) {
+        if (app_router_register_device(&router, (Device *)&devices[i]) != 0) {
+            for (int j = 0; j < initialized_device_count; j++) {
+                app_device_close((Device *)&devices[j]);
+            }
+            app_router_close(&router);
+            if (persistence.is_initialized) {
+                persistence_close(&persistence);
+            }
+            app_task_close();
+            return -1;
+        }
+    }
 
     // 注册消息回调函数
     if (persistence.is_initialized) {
@@ -220,6 +472,9 @@ int app_runner_run()
     // 启动路由管理器（连接云端、启动设备）
     if (app_router_start(&router) != 0) {
         app_router_close(&router);
+        if (persistence.is_initialized) {
+            persistence_close(&persistence);
+        }
         app_task_close();
         return -1;
     }

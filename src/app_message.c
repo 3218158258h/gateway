@@ -19,6 +19,27 @@
 #include "../thirdparty/log.c/log.h"
 #include "../thirdparty/cJSON/cJSON.h"
 #include <stdlib.h>
+#include <stdio.h>
+
+/**
+ * @brief 将十六进制字符转换为数值
+ *
+ * @param c 十六进制字符
+ * @return 0-15为有效值，-1为非法字符
+ */
+static int hex_char_to_value(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
 
 /**
  * @brief 二进制数据转十六进制字符串
@@ -47,7 +68,7 @@ static char *bin_to_str(unsigned char *binary, int len)
     // 逐字节转换为十六进制
     for (int i = 0; i < len; i++)
     {
-        sprintf(hex_str + i * 2, "%02X", binary[i]);
+        snprintf(hex_str + i * 2, 3, "%02X", binary[i]);
     }
     hex_str[len * 2] = '\0';
     return hex_str;
@@ -93,47 +114,19 @@ static int str_to_bin(const char *hex_str, unsigned char *binary, int len)
     {
         char high = hex_str[i * 2];      // 高4位字符
         char low = hex_str[i * 2 + 1];   // 低4位字符
-        
-        binary[i] = 0;
-
-        // 解析高4位
-        if (high <= '9' && high >= '0')
-        {
-            binary[i] = high - '0';
-        }
-        else if (high >= 'a' && high <= 'f')
-        {
-            binary[i] = high - 'a' + 10;
-        }
-        else if (high >= 'A' && high <= 'F')
-        {
-            binary[i] = high - 'A' + 10;
-        }
-        else
-        {
+        int high_value = hex_char_to_value(high);
+        if (high_value < 0) {
             log_warn("Invalid hex character: %c", high);
             return -1;
         }
-        binary[i] <<= 4;  // 左移4位
 
-        // 解析低4位
-        if (low <= '9' && low >= '0')
-        {
-            binary[i] |= low - '0';
-        }
-        else if (low >= 'a' && low <= 'f')
-        {
-            binary[i] |= low - 'a' + 10;
-        }
-        else if (low >= 'A' && low <= 'F')
-        {
-            binary[i] |= low - 'A' + 10;
-        }
-        else
-        {
+        int low_value = hex_char_to_value(low);
+        if (low_value < 0) {
             log_warn("Invalid hex character: %c", low);
             return -1;
         }
+
+        binary[i] = (unsigned char)((high_value << 4) | low_value);
     }
     return len;
 }
@@ -161,7 +154,7 @@ int app_message_initByBinary(Message *message, void *binary, int len)
     
     // 解析头部字段
     memcpy(&message->connection_type, binary, 1);       // 连接类型
-    memcpy(&message->id_len, binary + 1, 1);            // ID长度
+    memcpy(&message->id_len, binary + 1, 1);            // 设备标识长度
     memcpy(&message->data_len, binary + 2, 1);          // 数据长度
 
     // 验证消息长度
@@ -317,7 +310,7 @@ int app_message_saveBinary(Message *message, void *binary, int len)
 
     // 写入头部字段
     memcpy(binary, &message->connection_type, 1);       // 连接类型
-    memcpy(binary + 1, &message->id_len, 1);            // ID长度
+    memcpy(binary + 1, &message->id_len, 1);            // 设备标识长度
     memcpy(binary + 2, &message->data_len, 1);          // 数据长度
     
     // 写入payload数据

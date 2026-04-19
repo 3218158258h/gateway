@@ -27,6 +27,8 @@
 #define CONFIG_MAX_SECTION_LEN 64
 /* 最大配置文件路径长度 */
 #define CONFIG_MAX_PATH_LEN 256
+/* 默认配置文件路径（仅保留一处硬编码） */
+#define APP_DEFAULT_CONFIG_FILE "gateway.ini"
 
 /* 配置值类型 */
 typedef enum {
