@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
+#include <limits.h>
 #include <signal.h>
 #include <unistd.h>
 #include <time.h>
@@ -60,17 +62,45 @@ static int build_json_message(char *json_buf, int buf_size,
     return (len > 0 && len < buf_size) ? len : -1;
 }
 
-static int parse_u16_hex(const char *hex, unsigned char out[2])
+static int parse_device_id_hex(const char *hex, unsigned char out[2])
 {
-    unsigned int value = 0;
+    unsigned int device_id_value = 0;
     if (!hex || strlen(hex) != 4) {
         return -1;
     }
-    if (sscanf(hex, "%4x", &value) != 1) {
+    if (sscanf(hex, "%4x", &device_id_value) != 1) {
         return -1;
     }
-    out[0] = (unsigned char)((value >> 8) & 0xFF);
-    out[1] = (unsigned char)(value & 0xFF);
+    out[0] = (unsigned char)((device_id_value >> 8) & 0xFF);
+    out[1] = (unsigned char)(device_id_value & 0xFF);
+    return 0;
+}
+
+static int parse_u32_arg(const char *s, uint32_t *out)
+{
+    char *end = NULL;
+    unsigned long parsed_value;
+    if (!s || !out) return -1;
+    errno = 0;
+    parsed_value = strtoul(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0' || parsed_value > UINT32_MAX) {
+        return -1;
+    }
+    *out = (uint32_t)parsed_value;
+    return 0;
+}
+
+static int parse_int_arg(const char *s, int *out)
+{
+    char *end = NULL;
+    long parsed_value;
+    if (!s || !out) return -1;
+    errno = 0;
+    parsed_value = strtol(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0' || parsed_value < INT_MIN || parsed_value > INT_MAX) {
+        return -1;
+    }
+    *out = (int)parsed_value;
     return 0;
 }
 
@@ -98,15 +128,27 @@ int main(int argc, char *argv[])
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--count") == 0 && i + 1 < argc) {
-            count = (uint32_t)strtoul(argv[++i], NULL, 10);
+            if (parse_u32_arg(argv[++i], &count) != 0) {
+                fprintf(stderr, "Invalid --count: %s\n", argv[i]);
+                return -1;
+            }
         } else if (strcmp(argv[i], "--interval-ms") == 0 && i + 1 < argc) {
-            interval_ms = (uint32_t)strtoul(argv[++i], NULL, 10);
+            if (parse_u32_arg(argv[++i], &interval_ms) != 0) {
+                fprintf(stderr, "Invalid --interval-ms: %s\n", argv[i]);
+                return -1;
+            }
         } else if (strcmp(argv[i], "--start") == 0 && i + 1 < argc) {
-            seq = (uint32_t)strtoul(argv[++i], NULL, 10);
+            if (parse_u32_arg(argv[++i], &seq) != 0) {
+                fprintf(stderr, "Invalid --start: %s\n", argv[i]);
+                return -1;
+            }
         } else if (strcmp(argv[i], "--device-id") == 0 && i + 1 < argc) {
             device_id_arg = argv[++i];
         } else if (strcmp(argv[i], "--connection-type") == 0 && i + 1 < argc) {
-            connection_type = (int)strtol(argv[++i], NULL, 10);
+            if (parse_int_arg(argv[++i], &connection_type) != 0) {
+                fprintf(stderr, "Invalid --connection-type: %s\n", argv[i]);
+                return -1;
+            }
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -118,7 +160,7 @@ int main(int argc, char *argv[])
     }
 
     unsigned char id[2];
-    if (parse_u16_hex(device_id_arg, id) != 0) {
+    if (parse_device_id_hex(device_id_arg, id) != 0) {
         fprintf(stderr, "Invalid --device-id: %s (expected 4 hex chars)\n", device_id_arg);
         return -1;
     }
@@ -179,6 +221,10 @@ int main(int argc, char *argv[])
 
         Gateway_CommandType msg;
         memset(&msg, 0, sizeof(msg));
+        if ((size_t)json_len > sizeof(msg.data)) {
+            fprintf(stderr, "JSON too large: %d > %zu\n", json_len, sizeof(msg.data));
+            break;
+        }
         memcpy(msg.data, json_buf, (size_t)json_len);
         msg.length = (uint32_t)json_len;
 
