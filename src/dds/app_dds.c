@@ -100,6 +100,15 @@ DdsQosPolicy dds_qos_reliable(void)
     return qos;
 }
 
+int dds_is_compiled_enabled(void)
+{
+#if DDS_ENABLED
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 /**
  * @brief 查找话题信息
  * 

@@ -25,6 +25,17 @@ static const char *type_strings[] = {
     "mqtt", "dds", "auto"
 };
 
+static int transport_is_valid_type_string(const char *str)
+{
+    if (!str) return 0;
+    for (int i = 0; i <= TRANSPORT_TYPE_AUTO; i++) {
+        if (strcasecmp(str, type_strings[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
  * @brief 传输类型枚举转字符串
  * 
@@ -196,6 +207,10 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
     
     // 初始化DDS客户端
     if (manager->config.type == TRANSPORT_TYPE_DDS) {
+        if (!dds_is_compiled_enabled()) {
+            log_error("DDS transport requested but this binary was built without DDS support (rebuild with: make USE_DDS=1)");
+            return -1;
+        }
         DdsManager *dds = malloc(sizeof(DdsManager));
         if (dds) {
             DdsConfig dds_cfg = {0};
@@ -271,6 +286,11 @@ int transport_init_from_config(TransportManager *manager, const char *config_fil
     if (config_get_string(&config, "transport", "type", NULL, type_str, sizeof(type_str)) != 0 ||
         type_str[0] == '\0') {
         log_error("Missing required config: [transport].type");
+        config_destroy(&config);
+        return -1;
+    }
+    if (!transport_is_valid_type_string(type_str)) {
+        log_error("Invalid required config: [transport].type=%s (expected: mqtt|dds|auto)", type_str);
         config_destroy(&config);
         return -1;
     }

@@ -26,6 +26,7 @@
 /* 设备缓冲区大小（可通过配置覆盖） */
 #define DEFAULT_BUFFER_LEN 16384
 #define FRAME_HEADER_SIZE 3
+#define DEVICE_BUFFER_COUNT 2
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
 
 /**
@@ -309,14 +310,18 @@ int app_device_init(Device *device, char *filename)
     // 初始化接收缓冲区
     if (app_buffer_init(device->recv_buffer, g_device_buffer_len) < 0)
     {
+        log_error("Device %s buffer creation failed: index=1/%d", device->filename, DEVICE_BUFFER_COUNT);
         goto DEVICE_OPEN_FAIL;
     }
     
     // 初始化发送缓冲区
     if (app_buffer_init(device->send_buffer, g_device_buffer_len) < 0)
     {
+        log_error("Device %s buffer creation failed: index=2/%d", device->filename, DEVICE_BUFFER_COUNT);
         goto DEVICE_RECV_INIT_FAIL;
     }
+    log_info("Device %s buffers created successfully: count=%d, buffer_size=%d",
+             device->filename, DEVICE_BUFFER_COUNT, g_device_buffer_len);
     
     device->is_running = 0;
 

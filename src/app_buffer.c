@@ -68,8 +68,6 @@ int app_buffer_init(Buffer *buffer, int size)
     buffer->start = 0;      // 数据起始位置
     buffer->len = 0;        // 当前数据长度
     
-    log_debug("Buffer %p created", buffer);
-
     return 0;
 }
 
