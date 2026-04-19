@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <signal.h>
 #include <unistd.h>
+#include <time.h>
 #include <dds/dds.h>
 #include "GatewayData.h"
 
@@ -197,7 +198,10 @@ int main(int argc, char *argv[])
         seq++;
 
         if (interval_ms > 0) {
-            usleep((useconds_t)interval_ms * 1000u);
+            struct timespec req;
+            req.tv_sec = (time_t)(interval_ms / 1000u);
+            req.tv_nsec = (long)(interval_ms % 1000u) * 1000000L;
+            nanosleep(&req, NULL);
         }
     }
 
