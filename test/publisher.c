@@ -104,14 +104,82 @@ static int parse_int_arg(const char *s, int *out)
     return 0;
 }
 
+static int parse_connection_type_token(const char *token, int *out)
+{
+    char lower[32];
+    size_t len;
+    if (!token || !out) return -1;
+
+    len = strlen(token);
+    if (len == 0 || len >= sizeof(lower)) return -1;
+
+    for (size_t i = 0; i < len; i++) {
+        char c = token[i];
+        if (c >= 'A' && c <= 'Z') {
+            lower[i] = (char)(c - 'A' + 'a');
+        } else {
+            lower[i] = c;
+        }
+    }
+    lower[len] = '\0';
+
+    if (strcmp(lower, "none") == 0 || strcmp(lower, "0") == 0) {
+        *out = 0;
+        return 0;
+    }
+    if (strcmp(lower, "lora") == 0 || strcmp(lower, "1") == 0) {
+        *out = 1;
+        return 0;
+    }
+    if (strcmp(lower, "ble") == 0 || strcmp(lower, "ble_mesh") == 0 ||
+        strcmp(lower, "ble-mesh") == 0 || strcmp(lower, "2") == 0) {
+        *out = 2;
+        return 0;
+    }
+
+    return parse_int_arg(token, out);
+}
+
+static int parse_type_sequence(const char *sequence, int *types, int max_types)
+{
+    char *tmp;
+    char *token;
+    char *saveptr = NULL;
+    int count = 0;
+
+    if (!sequence || !types || max_types <= 0) return -1;
+
+    tmp = strdup(sequence);
+    if (!tmp) return -1;
+
+    token = strtok_r(tmp, ",", &saveptr);
+    while (token && count < max_types) {
+        while (*token == ' ' || *token == '\t') token++;
+        if (*token != '\0') {
+            if (parse_connection_type_token(token, &types[count]) != 0) {
+                free(tmp);
+                return -1;
+            }
+            count++;
+        }
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+
+    free(tmp);
+    return (count > 0) ? count : -1;
+}
+
 static void print_usage(const char *prog)
 {
-    printf("Usage: %s [--count N] [--interval-ms N] [--start N] [--device-id HEX4] [--connection-type N]\n", prog);
+    printf("Usage: %s [--count N] [--interval-ms N] [--start N] [--device-id HEX4]\n", prog);
+    printf("          [--connection-type N] [--device-type NAME] [--type-seq LIST]\n");
     printf("  --count N           send N messages (default: 0, means infinite)\n");
     printf("  --interval-ms N     interval in milliseconds (default: 1000)\n");
     printf("  --start N           start value for incrementing counter (default: 1)\n");
     printf("  --device-id HEX4    2-byte device id in hex, e.g. 0001 (default: 0001)\n");
     printf("  --connection-type N connection type value (default: 2)\n");
+    printf("  --device-type NAME  connection type alias: ble_mesh|lora|none\n");
+    printf("  --type-seq LIST     cyclic type sequence, e.g. ble_mesh,lora\n");
 }
 
 int main(int argc, char *argv[])
@@ -125,6 +193,9 @@ int main(int argc, char *argv[])
     uint32_t seq = 1;
     int connection_type = 2;
     const char *device_id_arg = "0001";
+    int type_seq[32];
+    int type_seq_len = 0;
+    const char *type_seq_arg = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--count") == 0 && i + 1 < argc) {
@@ -149,6 +220,13 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Invalid --connection-type: %s\n", argv[i]);
                 return -1;
             }
+        } else if ((strcmp(argv[i], "--device-type") == 0 || strcmp(argv[i], "--type") == 0) && i + 1 < argc) {
+            if (parse_connection_type_token(argv[++i], &connection_type) != 0) {
+                fprintf(stderr, "Invalid --device-type: %s\n", argv[i]);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--type-seq") == 0 && i + 1 < argc) {
+            type_seq_arg = argv[++i];
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -164,14 +242,26 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Invalid --device-id: %s (expected 4 hex chars)\n", device_id_arg);
         return -1;
     }
+    if (type_seq_arg) {
+        type_seq_len = parse_type_sequence(type_seq_arg, type_seq, (int)(sizeof(type_seq) / sizeof(type_seq[0])));
+        if (type_seq_len < 0) {
+            fprintf(stderr, "Invalid --type-seq: %s\n", type_seq_arg);
+            return -1;
+        }
+    }
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
     printf("DDS 发布者启动 (JSON格式)\n");
     printf("发布话题: %s\n", TOPIC_NAME);
-    printf("device_id=%s connection_type=%d count=%u interval_ms=%u start=%u\n",
-           device_id_arg, connection_type, count, interval_ms, seq);
+    if (type_seq_len > 0) {
+        printf("device_id=%s type_seq=%s count=%u interval_ms=%u start=%u\n",
+               device_id_arg, type_seq_arg, count, interval_ms, seq);
+    } else {
+        printf("device_id=%s connection_type=%d count=%u interval_ms=%u start=%u\n",
+               device_id_arg, connection_type, count, interval_ms, seq);
+    }
 
     participant = dds_create_participant(DDS_DOMAIN_DEFAULT, NULL, NULL);
     if (participant < 0) {
@@ -204,13 +294,14 @@ int main(int argc, char *argv[])
     while (!g_stop && (count == 0 || sent < count)) {
         char json_buf[4096];
         unsigned char payload[4];
+        int current_type = (type_seq_len > 0) ? type_seq[sent % (uint32_t)type_seq_len] : connection_type;
         payload[0] = (unsigned char)((seq >> 24) & 0xFF);
         payload[1] = (unsigned char)((seq >> 16) & 0xFF);
         payload[2] = (unsigned char)((seq >> 8) & 0xFF);
         payload[3] = (unsigned char)(seq & 0xFF);
 
         int json_len = build_json_message(json_buf, (int)sizeof(json_buf),
-                                          connection_type,
+                                          current_type,
                                           id, 2,
                                           payload, 4);
 
@@ -234,8 +325,9 @@ int main(int argc, char *argv[])
             break;
         }
 
-        printf("[TX %u] seq=%u payload=%02X%02X%02X%02X json=%s\n",
+        printf("[TX %u] seq=%u type=%d payload=%02X%02X%02X%02X json=%s\n",
                sent + 1, seq,
+               current_type,
                payload[0], payload[1], payload[2], payload[3],
                json_buf);
         fflush(stdout);
