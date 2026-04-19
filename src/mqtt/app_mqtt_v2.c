@@ -40,6 +40,23 @@ typedef struct {
 } MqttInternal;
 
 /**
+ * @brief 填充MQTT默认配置
+ */
+static void mqtt_fill_default_config(MqttConfig *config)
+{
+    if (!config) return;
+    memset(config, 0, sizeof(MqttConfig));
+    strcpy(config->broker_url, "tcp://localhost:1883");
+    config->keepalive_interval = 60;
+    config->clean_session = 1;
+    config->default_qos = MQTT_QOS_1;
+    config->auto_reconnect = 1;
+    config->reconnect_min_interval = 1;
+    config->reconnect_max_interval = 60;
+    config->reconnect_max_attempts = 0;
+}
+
+/**
  * @brief 连接丢失回调
  * 
  * 当MQTT连接断开时由Paho库调用。
@@ -352,29 +369,21 @@ int mqtt_init(MqttClient *client, const MqttConfig *config)
  */
 int mqtt_init_default(MqttClient *client, const char *broker_url, const char *client_id)
 {
-    MqttConfig config = {0};
+    MqttConfig config;
+    mqtt_fill_default_config(&config);
     
     // 设置Broker地址
     if (broker_url) {
         strncpy(config.broker_url, broker_url, sizeof(config.broker_url) - 1);
-    } else {
-        strcpy(config.broker_url, "tcp://localhost:1883");
+        config.broker_url[sizeof(config.broker_url) - 1] = '\0';
     }
     
     // 设置客户端ID
     if (client_id) {
         strncpy(config.client_id, client_id, sizeof(config.client_id) - 1);
+        config.client_id[sizeof(config.client_id) - 1] = '\0';
     }
-    
-    // 默认配置
-    config.keepalive_interval = 60;
-    config.clean_session = 1;
-    config.default_qos = MQTT_QOS_1;
-    config.auto_reconnect = 1;
-    config.reconnect_min_interval = 1;
-    config.reconnect_max_interval = 60;
-    config.reconnect_max_attempts = 0;
-    
+
     return mqtt_init(client, &config);
 }
 

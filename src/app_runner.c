@@ -239,12 +239,17 @@ static void app_runner_signal_handler(int sig)
  */
 static int load_persistence_config(PersistenceConfig *config, const char *config_file)
 {
+    if (!config || !config_file) {
+        return -1;
+    }
+
+    load_default_persistence_config(config);
+
     ConfigManager cfg_mgr = {0};
     
     // 初始化配置管理器
     if (config_init(&cfg_mgr, config_file) != 0) {
         log_warn("Failed to load config file, using defaults");
-        load_default_persistence_config(config);
         return 0;
     }
     
@@ -252,7 +257,6 @@ static int load_persistence_config(PersistenceConfig *config, const char *config
     if (config_load(&cfg_mgr) != 0) {
         log_warn("Failed to load config file, using defaults");
         config_destroy(&cfg_mgr);
-        load_default_persistence_config(config);
         return 0;
     }
     

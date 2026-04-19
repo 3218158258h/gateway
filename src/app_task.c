@@ -49,6 +49,29 @@ static pthread_cond_t queue_cond;           // 队列条件变量
 static int is_initialized = 0;              // 初始化标志
 
 /**
+ * @brief 广播停止并唤醒所有等待线程
+ */
+static void app_task_broadcast_stop(void)
+{
+    pthread_mutex_lock(&queue_lock);
+    pthread_cond_broadcast(&queue_cond);
+    pthread_mutex_unlock(&queue_lock);
+}
+
+/**
+ * @brief 清理已创建的执行线程
+ */
+static void app_task_cleanup_executors(int created_count)
+{
+    for (int i = 0; i < created_count; i++) {
+        if (executor_ptr[i]) {
+            pthread_cancel(executor_ptr[i]);
+            pthread_join(executor_ptr[i], NULL);
+        }
+    }
+}
+
+/**
  * @brief 销毁任务管理器同步原语
  */
 static void app_task_destroy_sync_primitives(void)
@@ -296,13 +319,7 @@ int app_task_init(int executors)
 THREAD_EXIT:
     int requested = executors_count;
     int created = i;
-    // 清理已创建的线程
-    for (int j = 0; j < i; j++) {
-        if (executor_ptr[j]) {
-            pthread_cancel(executor_ptr[j]);
-            pthread_join(executor_ptr[j], NULL);
-        }
-    }
+    app_task_cleanup_executors(created);
 
     // 清理资源
     free(executor_ptr);
@@ -368,11 +385,7 @@ int app_task_register(Task task, void *args)
 void app_task_signal_stop(void)
 {
     task_should_stop = 1;
-    
-    // 唤醒所有等待的工作线程
-    pthread_mutex_lock(&queue_lock);
-    pthread_cond_broadcast(&queue_cond);
-    pthread_mutex_unlock(&queue_lock);
+    app_task_broadcast_stop();
 }
 
 /**
@@ -401,12 +414,7 @@ void app_task_close(void)
     }
 
     // 发送停止信号
-    task_should_stop = 1;
-    
-    // 唤醒所有等待线程，使其感知 task_should_stop 并退出
-    pthread_mutex_lock(&queue_lock);
-    pthread_cond_broadcast(&queue_cond);
-    pthread_mutex_unlock(&queue_lock);
+    app_task_signal_stop();
 
     // 等待所有工作线程退出
     for (int i = 0; i < executors_count; i++) {

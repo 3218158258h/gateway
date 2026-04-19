@@ -26,6 +26,20 @@ static RouterManager g_router_instance;
 static RouterManager *g_router = NULL;
 
 /**
+ * @brief 路由初始化失败统一清理
+ */
+static int router_init_fail(RouterManager *router, int transport_initialized)
+{
+    if (!router) return -1;
+    if (transport_initialized) {
+        transport_close(&router->transport);
+    }
+    pthread_mutex_destroy(&router->lock);
+    memset(router, 0, sizeof(RouterManager));
+    return -1;
+}
+
+/**
  * @brief 根据连接类型查找设备
  * 
  * 在路由管理器的设备列表中查找指定连接类型的设备。
@@ -307,45 +321,51 @@ int app_router_init(RouterManager *router, const char *config_file)
     /* 初始化设备计数和状态 */
     router->device_count = 0;
     router->state = ROUTER_STATE_STOPPED;
-    router->is_initialized = 1;
+    router->is_initialized = 0;
     
     const char *cfg_file = config_file ? config_file : APP_DEFAULT_CONFIG_FILE;
 
     ConfigManager cfg;
+    int cfg_inited = 0;
+    int transport_inited = 0;
     int router_message_size = ROUTER_DEFAULT_MESSAGE_SIZE;
-    if (config_init(&cfg, cfg_file) == 0) {
-        if (config_load(&cfg) != 0) {
-            config_destroy(&cfg);
-            log_error("Failed to load router config file: %s", cfg_file);
-            pthread_mutex_destroy(&router->lock);
-            return -1;
-        }
-        router_message_size = config_get_int(&cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
-        config_destroy(&cfg);
-    } else {
+    if (config_init(&cfg, cfg_file) != 0) {
         log_error("Failed to load router config file: %s", cfg_file);
-        pthread_mutex_destroy(&router->lock);
-        return -1;
+        return router_init_fail(router, transport_inited);
     }
+    cfg_inited = 1;
+
+    if (config_load(&cfg) != 0) {
+        log_error("Failed to load router config file: %s", cfg_file);
+        config_destroy(&cfg);
+        return router_init_fail(router, transport_inited);
+    }
+    router_message_size = config_get_int(&cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
+    config_destroy(&cfg);
+    cfg_inited = 0;
+
     if (router_message_size <= 0) {
         log_error("Invalid config [router].max_message_size: %d", router_message_size);
-        pthread_mutex_destroy(&router->lock);
-        return -1;
+        return router_init_fail(router, transport_inited);
     }
     router->max_message_size = router_message_size;
     
     /* 从配置文件初始化传输层 */
     if (transport_init_from_config(&router->transport, cfg_file) != 0) {
         log_error("Failed to initialize transport from config file: %s", cfg_file);
-        pthread_mutex_destroy(&router->lock);
-        return -1;
+        return router_init_fail(router, transport_inited);
     }
+    transport_inited = 1;
     
     /* 注册传输层回调函数 */
     transport_on_message(&router->transport, on_transport_message);
     transport_on_state_changed(&router->transport, on_transport_state_changed);
     
     /* 设置全局路由管理器指针 */
+    if (cfg_inited) {
+        config_destroy(&cfg);
+    }
+    router->is_initialized = 1;
     g_router = router;
     log_info("Router initialized: max_message_size=%d, max_devices=%d",
              router->max_message_size, ROUTER_MAX_DEVICES);
