@@ -100,3 +100,8 @@ python3 ./simulate_lower_device.py --port /tmp/gateway-vdev/sim0 --ack-at --coun
 ```bash
 cat /tmp/gateway-vdev/gw0 | hexdump -C
 ```
+
+6. 监控某个虚拟口（可选）
+```bash
+./monitor_virtual_port.sh /tmp/gateway-vdev/gw0
+```
