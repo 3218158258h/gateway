@@ -98,9 +98,14 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_co
         return -1;
     }
     
-    ConfigManager cfg_mgr;
-    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
+    ConfigManager cfg_mgr = {0};
+    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0) {
         log_error("Failed to load device config file: %s", APP_DEFAULT_CONFIG_FILE);
+        return -1;
+    }
+    if (config_load(&cfg_mgr) != 0) {
+        log_error("Failed to load device config file: %s", APP_DEFAULT_CONFIG_FILE);
+        config_destroy(&cfg_mgr);
         return -1;
     }
 
@@ -173,9 +178,14 @@ static int load_runtime_config(RuntimeConfig *runtime)
     runtime->device_buffer_size = DEFAULT_DEVICE_BUFFER_SIZE;
     runtime->persistence_max_queue_size = DEFAULT_PERSIST_QUEUE_SIZE;
 
-    ConfigManager cfg_mgr;
-    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
+    ConfigManager cfg_mgr = {0};
+    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0) {
         log_error("Failed to load runtime config file: %s", APP_DEFAULT_CONFIG_FILE);
+        return -1;
+    }
+    if (config_load(&cfg_mgr) != 0) {
+        log_error("Failed to load runtime config file: %s", APP_DEFAULT_CONFIG_FILE);
+        config_destroy(&cfg_mgr);
         return -1;
     }
 

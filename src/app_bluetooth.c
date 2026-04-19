@@ -43,9 +43,14 @@ static void app_bluetooth_loadRuntimeConfig(char *m_addr, size_t m_addr_len,
     snprintf(net_id, net_id_len, "%s", DEFAULT_BT_NETID);
     *work_baud = app_bluetooth_resolveBaudRate(DEFAULT_BT_WORK_BAUD);
 
-    ConfigManager cfg_mgr;
-    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
+    ConfigManager cfg_mgr = {0};
+    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0) {
         log_warn("Bluetooth config load failed, using defaults");
+        return;
+    }
+    if (config_load(&cfg_mgr) != 0) {
+        log_warn("Bluetooth config load failed, using defaults");
+        config_destroy(&cfg_mgr);
         return;
     }
 
