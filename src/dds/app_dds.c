@@ -464,11 +464,11 @@ int dds_publish(DdsManager *manager, const char *topic_name,
         return -1;
     }
     
-    log_debug("DDS published to %s: %zu bytes", topic_name, len);
+    log_trace("DDS published to %s: %zu bytes", topic_name, len);
     return 0;
 #else
     // DDS未启用时的桩函数
-    log_debug("DDS publish (stub): topic=%s, len=%zu", topic_name, len);
+    log_trace("DDS publish (stub): topic=%s, len=%zu", topic_name, len);
     return 0;
 #endif
 }
@@ -513,7 +513,7 @@ static void on_dds_data_available(dds_entity_t reader, void *arg)
     if (n > 0 && infos[0].valid_data) {
         const char *topic_name = find_topic_name_by_reader(manager, reader);
         
-        log_debug("DDS received from %s: %u bytes", topic_name, msg.length);
+        log_info("DDS received from %s: %u bytes", topic_name, msg.length);
         
         // 调用用户注册的回调函数
         if (manager->on_data_available) {

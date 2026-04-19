@@ -113,7 +113,6 @@ int app_buffer_read(Buffer *buffer, void *buf, int len)
 
     pthread_mutex_unlock(&buffer->lock);
     
-    log_trace("Buffer status after read: start %d, len %d", buffer->start, buffer->len);
     return len;
 }
 
@@ -214,7 +213,6 @@ int app_buffer_write(Buffer *buffer, void *buf, int len)
     
     pthread_mutex_unlock(&buffer->lock);
     
-    log_trace("Buffer status after write: start %d, len %d", buffer->start, buffer->len);
     return 0;
 }
 

@@ -68,6 +68,8 @@ cd <project-root>
 - `serial_devices = /dev/ttyUSB0,/dev/ttyUSB1`
 - `buffer_size = 16384`
 
+> 多蓝牙模块场景：每个蓝牙模块对应一个串口设备，把所有串口写到 `serial_devices`（逗号分隔）即可并行接入。
+
 ---
 
 ## 4. 无硬件联调（推荐）
@@ -120,6 +122,14 @@ SELECT COUNT(*) FROM messages;
 SELECT id, topic, status, retry_count, created_at FROM messages ORDER BY id DESC LIMIT 20;
 ```
 
+也可以使用项目内置 Python 脚本（使用 Python 内置 sqlite3）：
+```bash
+cd <project-root>
+python3 read_gateway_db.py
+# 或指定数据库路径
+python3 read_gateway_db.py --db <db_path_from_gateway_ini> --limit 50
+```
+
 ---
 
 ## 6. 常见问题
@@ -128,9 +138,10 @@ SELECT id, topic, status, retry_count, created_at FROM messages ORDER BY id DESC
 通常是二进制未开启 DDS 编译（未使用 `make USE_DDS=1`）。
 
 ### Q2: 启动日志太多
-当前已精简 Buffer 创建日志：
-- 成功只打印创建结果（数量/大小）
-- 失败打印第几个创建失败
+当前已进一步精简高频日志：
+- 不再打印缓冲区读写剩余长度跟踪日志
+- 仅在缓冲区创建失败时打印“第几个创建失败”
+- 高频发布/持久化日志下调到 TRACE，默认 INFO 级别下不会刷屏
 
 ---
 

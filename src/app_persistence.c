@@ -289,7 +289,7 @@ int persistence_save(PersistenceManager *manager, const char *topic,
     
     sqlite3_finalize(stmt);
     
-    log_debug("Message saved: id=%llu, topic=%s, len=%zu", 
+    log_trace("Message saved: id=%llu, topic=%s, len=%zu", 
               (unsigned long long)id, topic, len);
     return 0;
 }

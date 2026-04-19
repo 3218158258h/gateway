@@ -320,9 +320,6 @@ int app_device_init(Device *device, char *filename)
         log_error("Device %s buffer creation failed: index=2/%d", device->filename, DEVICE_BUFFER_COUNT);
         goto DEVICE_RECV_INIT_FAIL;
     }
-    log_info("Device %s buffers created successfully: count=%d, buffer_size=%d",
-             device->filename, DEVICE_BUFFER_COUNT, g_device_buffer_len);
-    
     device->is_running = 0;
 
     // 设置默认虚函数

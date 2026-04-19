@@ -318,7 +318,7 @@ static void on_device_message_persist(RouterManager *router, Device *device,
     // 保存消息到数据库
     uint64_t msg_id;
     if (persistence_save(&persistence, "GatewayData", data, len, 1, &msg_id) == 0) {
-        log_debug("Message persisted: id=%llu", (unsigned long long)msg_id);
+        log_trace("Message persisted: id=%llu", (unsigned long long)msg_id);
     }
 }
 

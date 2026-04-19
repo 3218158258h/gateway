@@ -7,12 +7,12 @@
 #include "../include/app_config.h"
 #include "../thirdparty/log.c/log.h"
 
-#define MAX_BLUETOOTH_DEVICES 4
 #define READ_BUFFER_SIZE 256
 #define BT_ADDR_STR_LEN 4
 #define DEFAULT_BT_MADDR "0001"
 #define DEFAULT_BT_NETID "1111"
 #define DEFAULT_BT_WORK_BAUD 115200
+#define BT_CONTEXT_GROW_STEP 8
 
 typedef struct {
     int device_fd;
@@ -20,8 +20,28 @@ typedef struct {
     int read_buffer_len;
 } BluetoothContext;
 
-static BluetoothContext bt_contexts[MAX_BLUETOOTH_DEVICES];
+static BluetoothContext *bt_contexts = NULL;
 static int bt_context_count = 0;
+static int bt_context_capacity = 0;
+
+static int app_bluetooth_ensureContextCapacity(void)
+{
+    if (bt_context_count < bt_context_capacity) {
+        return 0;
+    }
+
+    int new_capacity = bt_context_capacity + BT_CONTEXT_GROW_STEP;
+    BluetoothContext *new_contexts = realloc(bt_contexts, (size_t)new_capacity * sizeof(BluetoothContext));
+    if (!new_contexts) {
+        log_error("Bluetooth context allocation failed");
+        return -1;
+    }
+
+    memset(new_contexts + bt_context_capacity, 0, (size_t)(new_capacity - bt_context_capacity) * sizeof(BluetoothContext));
+    bt_contexts = new_contexts;
+    bt_context_capacity = new_capacity;
+    return 0;
+}
 
 static SerialBaudRate app_bluetooth_resolveBaudRate(int baud_rate)
 {
@@ -80,11 +100,13 @@ static BluetoothContext* get_or_create_context(int device_fd) {
             return &bt_contexts[i];
         }
     }
-    if (bt_context_count < MAX_BLUETOOTH_DEVICES) {
+
+    if (app_bluetooth_ensureContextCapacity() == 0) {
         bt_contexts[bt_context_count].device_fd = device_fd;
         bt_contexts[bt_context_count].read_buffer_len = 0;
         return &bt_contexts[bt_context_count++];
     }
+
     return NULL;
 }
 
