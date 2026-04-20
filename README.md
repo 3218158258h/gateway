@@ -80,7 +80,13 @@ cd <project-root>
 ./create_virtual_nodes.sh 3 /tmp/gateway-vdev
 ```
 
-脚本会输出 `gw` 端口列表，把它写进 `gateway.ini` 的 `[device].serial_devices`。
+按设备类型创建（轮询分配）：
+```bash
+./create_virtual_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-map.tsv --types ble_mesh,lora
+```
+
+脚本会输出 `gw` 端口列表，把它写进 `gateway.ini` 的 `[device].serial_devices`。  
+并生成映射文件（列：`index type_name type_code gw_port sim_port socat_pid`），便于你按类型统计。
 
 ### 4.2 模拟下位机发消息
 ```bash
@@ -103,6 +109,25 @@ python3 <project-root>/simulate_lower_device.py \
 ```bash
 ./monitor_virtual_port.sh /tmp/gateway-vdev/gw0
 ```
+
+### 4.4 DDS 下行命令发布（按设备类型）
+先编译测试发布者：
+```bash
+cd <project-root>
+make -C test
+```
+
+按单一设备类型发送（支持别名：`ble_mesh|lora|none`）：
+```bash
+<project-root>/test/publisher --device-type ble_mesh --count 100 --interval-ms 200
+```
+
+按多类型循环发送：
+```bash
+<project-root>/test/publisher --type-seq ble_mesh,lora --count 100 --interval-ms 200
+```
+
+> 注意：网关当前下行路由按 `connection_type` 匹配设备，不按消息 `id` 匹配。
 
 ---
 
