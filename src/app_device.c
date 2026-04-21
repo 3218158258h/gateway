@@ -25,12 +25,21 @@
 
 /* 设备缓冲区大小（可通过配置覆盖） */
 #define DEFAULT_BUFFER_LEN 16384
+#define RECV_TASK_BUF_SIZE 1024
 #define FRAME_HEADER_SIZE 3
 #define DEVICE_BUFFER_COUNT 2
+#define MAX_FRAME_PAYLOAD_LEN (RECV_TASK_BUF_SIZE - FRAME_HEADER_SIZE)
 /* Reserve one header-length margin; when buffer nears capacity and frame is still incomplete,
  * discard one byte to keep parser forward progress and avoid blocking. */
 #define RECV_STALLED_MARGIN FRAME_HEADER_SIZE
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
+
+static int app_device_is_valid_connection_type(int connection_type)
+{
+    return connection_type == CONNECTION_TYPE_NONE ||
+           connection_type == CONNECTION_TYPE_LORA ||
+           connection_type == CONNECTION_TYPE_BLE_MESH;
+}
 
 /**
  * @brief 关闭设备文件描述符并重置为-1
@@ -82,7 +91,7 @@ int app_device_get_buffer_size(void)
  */
 static void *app_device_backgroundTask(void *argv)
 {
-    unsigned char buf[1024];
+    unsigned char buf[RECV_TASK_BUF_SIZE];
     Device *device = argv;
     
     while (device->is_running)
@@ -151,14 +160,14 @@ static void app_device_defaultRecvTask(void *argv)
         int total_len = id_len + data_len;
 
         // Invalid type: discard one byte to avoid bad header blocking subsequent frames.
-        if (connection_type < CONNECTION_TYPE_NONE || connection_type > CONNECTION_TYPE_BLE_MESH) {
+        if (!app_device_is_valid_connection_type(connection_type)) {
             app_buffer_read(device->recv_buffer, header, 1);
             log_warn("Discard invalid recv frame type: %d", connection_type);
             continue;
         }
 
         // Invalid length: discard header to avoid dead loop / overflow risk.
-        if (total_len < 0 || total_len > ((int)sizeof(buf) - FRAME_HEADER_SIZE)) {
+        if (total_len < 0 || total_len > MAX_FRAME_PAYLOAD_LEN) {
             app_buffer_read(device->recv_buffer, header, FRAME_HEADER_SIZE);
             log_warn("Discard invalid recv frame length: id_len=%d, data_len=%d", id_len, data_len);
             continue;
@@ -167,7 +176,8 @@ static void app_device_defaultRecvTask(void *argv)
         int required_len = FRAME_HEADER_SIZE + total_len;
         // Incomplete frame: wait for more bytes; near-capacity stall triggers one-byte discard.
         if (device->recv_buffer->len < required_len) {
-            if (device->recv_buffer->len > device->recv_buffer->size - RECV_STALLED_MARGIN) {
+            int stall_threshold = device->recv_buffer->size - RECV_STALLED_MARGIN;
+            if (device->recv_buffer->len > stall_threshold) {
                 app_buffer_read(device->recv_buffer, header, 1);
                 log_warn("Discard stalled incomplete recv frame to prevent blocking: buffered=%d, need=%d",
                          device->recv_buffer->len, required_len);
