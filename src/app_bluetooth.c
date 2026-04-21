@@ -18,6 +18,7 @@ typedef struct {
     int device_fd;
     unsigned char read_buffer[READ_BUFFER_SIZE];
     int read_buffer_len;
+    BluetoothProtocolConfig protocol;
 } BluetoothContext;
 
 static BluetoothContext *bt_contexts = NULL;
@@ -94,7 +95,7 @@ static void app_bluetooth_loadRuntimeConfig(char *m_addr, size_t m_addr_len,
     config_destroy(&cfg_mgr);
 }
 
-static BluetoothContext* get_or_create_context(int device_fd) {
+static BluetoothContext* get_or_create_context(int device_fd, const BluetoothProtocolConfig *protocol) {
     for (int i = 0; i < bt_context_count; i++) {
         if (bt_contexts[i].device_fd == device_fd) {
             return &bt_contexts[i];
@@ -104,6 +105,11 @@ static BluetoothContext* get_or_create_context(int device_fd) {
     if (app_bluetooth_ensureContextCapacity() == 0) {
         bt_contexts[bt_context_count].device_fd = device_fd;
         bt_contexts[bt_context_count].read_buffer_len = 0;
+        if (protocol) {
+            bt_contexts[bt_context_count].protocol = *protocol;
+        } else {
+            memset(&bt_contexts[bt_context_count].protocol, 0, sizeof(BluetoothProtocolConfig));
+        }
         return &bt_contexts[bt_context_count++];
     }
 
@@ -118,8 +124,6 @@ static BluetoothContext* find_context(int device_fd) {
     }
     return NULL;
 }
-
-static const unsigned char fix_header[] = {0xF1, 0xDD};
 
 static void app_bluetooth_ignoreBuffer(BluetoothContext *ctx, int n)
 {
@@ -168,7 +172,7 @@ static int bluetooth_send_cmd_expect_ack(SerialDevice *serial_device, const void
     return app_bluetooth_waitACK(serial_device);
 }
 
-int app_bluetooth_setConnectionType(SerialDevice *serial_device)
+int app_bluetooth_setConnectionType(SerialDevice *serial_device, const char *protocol_name)
 {
     if (!serial_device) return -1;
 
@@ -177,11 +181,16 @@ int app_bluetooth_setConnectionType(SerialDevice *serial_device)
     SerialBaudRate work_baud = SERIAL_BAUD_RATE_115200;
     app_bluetooth_loadRuntimeConfig(m_addr, sizeof(m_addr), net_id, sizeof(net_id), &work_baud);
     
-    serial_device->super.connection_type = CONNECTION_TYPE_BLE_MESH;
+    BluetoothProtocolConfig protocol;
+    if (app_protocol_load_bluetooth(protocol_name, &protocol) != 0) {
+        return -1;
+    }
+
+    serial_device->super.connection_type = protocol.connection_type;
     serial_device->super.vptr->post_read = app_bluetooth_postRead;
     serial_device->super.vptr->pre_write = app_bluetooth_preWrite;
     
-    get_or_create_context(serial_device->super.fd);
+    get_or_create_context(serial_device->super.fd, &protocol);
     
     app_serial_setBaudRate(serial_device, SERIAL_BAUD_RATE_9600);
     app_serial_setBlockMode(serial_device, 0);
@@ -261,7 +270,7 @@ int app_bluetooth_postRead(Device *device, void *ptr, int *len)
     
     BluetoothContext *ctx = find_context(device->fd);
     if (!ctx) {
-        ctx = get_or_create_context(device->fd);
+        ctx = get_or_create_context(device->fd, NULL);
         if (!ctx) {
             *len = 0;
             return 0;
@@ -287,6 +296,14 @@ int app_bluetooth_postRead(Device *device, void *ptr, int *len)
         return 0;
     }
 
+    const int frame_header_len = ctx->protocol.frame_header_len;
+    const int frame_tail_len = ctx->protocol.frame_tail_len;
+    const int id_len = ctx->protocol.id_len;
+    if (frame_header_len <= 0 || id_len <= 0) {
+        *len = 0;
+        return 0;
+    }
+
     for (int i = 0; i < ctx->read_buffer_len - 3; i++)
     {
         if (memcmp(ctx->read_buffer + i, "OK\r\n", 4) == 0) {
@@ -294,38 +311,54 @@ int app_bluetooth_postRead(Device *device, void *ptr, int *len)
             *len = 0;
             return 0;
         }
-        else if (memcmp(ctx->read_buffer + i, fix_header, BT_FRAME_HEADER_SIZE) == 0) {
+        else if (memcmp(ctx->read_buffer + i, ctx->protocol.frame_header, frame_header_len) == 0) {
             // 检查是否有足够的字节来组成一个完整的包
             int remaining_after_header = ctx->read_buffer_len - i;
     
-            if (remaining_after_header < 3) {
+            if (remaining_after_header < frame_header_len + BT_LENGTH_FIELD_SIZE) {
                 *len = 0;
                 return 0;
             }
             app_bluetooth_ignoreBuffer(ctx, i);
             
-            if (ctx->read_buffer_len < 3) {
+            if (ctx->read_buffer_len < frame_header_len + BT_LENGTH_FIELD_SIZE) {
                 *len = 0;
                 return 0;
             }
             
-            int packet_len = ctx->read_buffer[2];
+            int packet_len = ctx->read_buffer[frame_header_len];
             
-            if (packet_len > READ_BUFFER_SIZE - 3 || packet_len < BT_PAYLOAD_MIN_LEN) {
+            int fixed_overhead = frame_header_len + BT_LENGTH_FIELD_SIZE + frame_tail_len;
+            if (fixed_overhead >= READ_BUFFER_SIZE) {
+                log_error("Invalid protocol frame overhead: %d", fixed_overhead);
+                ctx->read_buffer_len = 0;
+                *len = 0;
+                return 0;
+            }
+            int max_payload_len = READ_BUFFER_SIZE - fixed_overhead;
+            if (packet_len > max_payload_len ||
+                packet_len < id_len) {
                 log_error("Invalid packet length: %d", packet_len);
                 ctx->read_buffer_len = 0;
                 *len = 0;
                 return 0;
             }
             
-            if (ctx->read_buffer_len < packet_len + 3) {
+            if (ctx->read_buffer_len < packet_len + frame_header_len + BT_LENGTH_FIELD_SIZE + frame_tail_len) {
                 *len = 0;
                 return 0;
             }
+            if (frame_tail_len > 0) {
+                int tail_offset = frame_header_len + BT_LENGTH_FIELD_SIZE + packet_len;
+                if (memcmp(ctx->read_buffer + tail_offset, ctx->protocol.frame_tail, frame_tail_len) != 0) {
+                    app_bluetooth_ignoreBuffer(ctx, 1);
+                    *len = 0;
+                    return 0;
+                }
+            }
 
-            int data_len = packet_len - BT_DEVICE_ID_SIZE;
+            int data_len = packet_len - id_len;
             int offset = 0;
-            int id_len = BT_DEVICE_ID_SIZE;
             /* 类型 */
             memcpy(ptr + offset, &device->connection_type, 1);
             offset += 1;
@@ -336,18 +369,18 @@ int app_bluetooth_postRead(Device *device, void *ptr, int *len)
             memcpy(ptr + offset, &data_len, 1);
             offset += 1;
             /* ID (位置: 帧头2 + 长度1 = 3) */
-            int id_offset = BT_FRAME_HEADER_SIZE + BT_LENGTH_FIELD_SIZE;    
-            memcpy(ptr + offset, ctx->read_buffer + id_offset, BT_DEVICE_ID_SIZE);
-            offset += BT_DEVICE_ID_SIZE;
+            int id_offset = frame_header_len + BT_LENGTH_FIELD_SIZE;
+            memcpy(ptr + offset, ctx->read_buffer + id_offset, id_len);
+            offset += id_len;
             /* 数据 (位置: 3 + 2 = 5) */
             if (data_len > 0) {
-                int data_offset = id_offset + BT_DEVICE_ID_SIZE;
+                int data_offset = id_offset + id_len;
                 memcpy(ptr + offset, ctx->read_buffer + data_offset, data_len);
                 offset += data_len;
             }
             
             *len = offset;
-            app_bluetooth_ignoreBuffer(ctx, BT_FRAME_HEADER_SIZE + BT_LENGTH_FIELD_SIZE + packet_len);
+            app_bluetooth_ignoreBuffer(ctx, frame_header_len + BT_LENGTH_FIELD_SIZE + packet_len + frame_tail_len);
             return 0;
         }   
     }
@@ -363,33 +396,46 @@ int app_bluetooth_preWrite(Device *device, void *ptr, int *len)
         return 0;
     }
     
+    BluetoothContext *ctx = find_context(device->fd);
+    if (!ctx) {
+        *len = 0;
+        return 0;
+    }
+
+    unsigned char incoming_type = 0;
     int temp = 0;
-    unsigned char buf[30];
-    memcpy(&temp, ptr, 1);
-    if (temp != CONNECTION_TYPE_BLE_MESH)
+    unsigned char buf[64];
+    size_t cmd_prefix_len = strlen(ctx->protocol.mesh_cmd_prefix);
+    if (cmd_prefix_len == 0 || cmd_prefix_len >= sizeof(buf) - 2) {
+        *len = 0;
+        return 0;
+    }
+
+    memcpy(&incoming_type, ptr, 1);
+    if ((ConnectionType)incoming_type != ctx->protocol.connection_type)
     {
         *len = 0;
         return 0;
     }
 
     memcpy(&temp, ptr + 1, 1);
-    if (temp != 2)
+    if (temp != ctx->protocol.id_len)
     {
         *len = 0;
         return 0;
     }
-    memcpy(buf, "AT+MESH", 8);
-    memcpy(buf + 8, ptr + 3, 2);
+    memcpy(buf, ctx->protocol.mesh_cmd_prefix, cmd_prefix_len);
+    memcpy(buf + cmd_prefix_len, ptr + 3, (size_t)ctx->protocol.id_len);
 
     memcpy(&temp, ptr + 2, 1);
-    if (temp > 18) {
+    if (temp > (int)(sizeof(buf) - cmd_prefix_len - ctx->protocol.id_len - 2)) {
         log_warn("Bluetooth data too large: %d", temp);
         *len = 0;
         return 0;
     }
-    memcpy(buf + 10, ptr + 5, temp);
-    memcpy(buf + 10 + temp, "\r\n", 2);
-    *len = temp + 12;
+    memcpy(buf + cmd_prefix_len + ctx->protocol.id_len, ptr + 3 + ctx->protocol.id_len, temp);
+    memcpy(buf + cmd_prefix_len + ctx->protocol.id_len + temp, "\r\n", 2);
+    *len = temp + (int)cmd_prefix_len + ctx->protocol.id_len + 2;
     memcpy(ptr, buf, *len);
     return 0;
 }
