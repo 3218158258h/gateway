@@ -3,8 +3,8 @@ set -euo pipefail
 
 PORT="${1:-}"
 if [[ -z "$PORT" ]]; then
-  echo "Usage: ./monitor_virtual_port.sh <port_path>" >&2
-  echo "Example: ./monitor_virtual_port.sh /tmp/gateway-vdev/gw0" >&2
+  echo "Usage: ./scripts/monitor_virtual_port.sh <port_path>" >&2
+  echo "Example: ./scripts/monitor_virtual_port.sh /tmp/gateway-vdev/gw0" >&2
   exit 1
 fi
 

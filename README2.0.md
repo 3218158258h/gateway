@@ -18,7 +18,7 @@
 ### Gate-0：环境与构建闸门
 - `make` 成功
 - `make -C test` 成功
-- `create_virtual_nodes.sh` 可创建虚拟串口
+- `scripts/create_virtual_nodes.sh` 可创建虚拟串口
 - 依赖齐全：`MQTTClient.h`、`dds/dds.h`、`socat`
 
 **判定**
@@ -81,7 +81,7 @@
 cd <project-root>
 make
 make -C test
-./create_virtual_nodes.sh 2 /tmp/gateway-vdev
+./scripts/create_virtual_nodes.sh 2 /tmp/gateway-vdev
 ```
 
 **通过标志**
@@ -117,9 +117,9 @@ make -C test
 4. 监控对应网关串口输出。
 
 ```bash
-./create_virtual_nodes.sh 3 /tmp/gateway-vdev
-python3 simulate_lower_device.py --port /tmp/gateway-vdev/sim0 --device-id 0001 --payload 01020304 --count 1000 --interval 0.02
-./monitor_virtual_port.sh /tmp/gateway-vdev/gw0
+./scripts/create_virtual_nodes.sh 3 /tmp/gateway-vdev
+python3 scripts/simulate_lower_device.py --port /tmp/gateway-vdev/sim0 --device-id 0001 --payload 01020304 --count 1000 --interval 0.02
+./scripts/monitor_virtual_port.sh /tmp/gateway-vdev/gw0
 ```
 
 **通过标志**
@@ -168,7 +168,7 @@ python3 simulate_lower_device.py --port /tmp/gateway-vdev/sim0 --device-id 0001 
 3. 重启网关，检查数据库状态。
 
 ```bash
-python3 read_gateway_db.py --limit 100
+python3 scripts/read_gateway_db.py --limit 100
 ```
 
 **通过标志**

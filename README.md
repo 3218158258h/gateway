@@ -77,12 +77,12 @@ cd <project-root>
 ### 4.1 创建虚拟设备节点
 ```bash
 cd <project-root>
-./create_virtual_nodes.sh 3 /tmp/gateway-vdev
+./scripts/create_virtual_nodes.sh 3 /tmp/gateway-vdev
 ```
 
 按设备类型创建（轮询分配）：
 ```bash
-./create_virtual_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-map.tsv --types ble_mesh,lora
+./scripts/create_virtual_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-map.tsv --types ble_mesh,lora
 ```
 
 脚本会输出 `gw` 端口列表，把它写进 `gateway.ini` 的 `[device].serial_devices`。  
@@ -90,7 +90,7 @@ cd <project-root>
 
 ### 4.2 模拟下位机发消息
 ```bash
-python3 <project-root>/simulate_lower_device.py \
+python3 <project-root>/scripts/simulate_lower_device.py \
   --port /tmp/gateway-vdev/sim0 \
   --device-id 0001 \
   --payload 01020304 \
@@ -100,14 +100,14 @@ python3 <project-root>/simulate_lower_device.py \
 
 可选：模拟 AT 指令 ACK
 ```bash
-python3 <project-root>/simulate_lower_device.py \
+python3 <project-root>/scripts/simulate_lower_device.py \
   --port /tmp/gateway-vdev/sim0 \
   --ack-at --count 0
 ```
 
 ### 4.3 监控串口数据
 ```bash
-./monitor_virtual_port.sh /tmp/gateway-vdev/gw0
+./scripts/monitor_virtual_port.sh /tmp/gateway-vdev/gw0
 ```
 
 ### 4.4 DDS 下行命令发布（按设备类型）
@@ -150,9 +150,9 @@ SELECT id, topic, status, retry_count, created_at FROM messages ORDER BY id DESC
 也可以使用项目内置 Python 脚本（使用 Python 内置 sqlite3）：
 ```bash
 cd <project-root>
-python3 read_gateway_db.py
+python3 scripts/read_gateway_db.py
 # 或指定数据库路径
-python3 read_gateway_db.py --db <db_path_from_gateway_ini> --limit 50
+python3 scripts/read_gateway_db.py --db <db_path_from_gateway_ini> --limit 50
 ```
 
 ---
@@ -185,7 +185,9 @@ gateway/
 ├── include/
 ├── test/
 ├── gateway.ini
-├── create_virtual_nodes.sh
-├── simulate_lower_device.py
-└── monitor_virtual_port.sh
+├── scripts/
+│   ├── create_virtual_nodes.sh
+│   ├── simulate_lower_device.py
+│   ├── monitor_virtual_port.sh
+│   └── read_gateway_db.py
 ```
