@@ -128,46 +128,72 @@ static void *app_device_backgroundTask(void *argv)
 static void app_device_defaultRecvTask(void *argv)
 {
     unsigned char buf[1024];
+    unsigned char header[FRAME_HEADER_SIZE];
     Device *device = argv;
-    
-    // 检查是否有足够数据读取头部
-    if (device->recv_buffer->len < FRAME_HEADER_SIZE) {
+
+    if (!device || !device->recv_buffer) {
         return;
     }
-    
-    // 先peek头部，不移除数据
-    if (app_buffer_peek(device->recv_buffer, buf, FRAME_HEADER_SIZE) < FRAME_HEADER_SIZE) {
-        return;
-    }
-    
-    // 解析消息头
-    int id_len = buf[1];      // 设备标识长度
-    int data_len = buf[2];    // 数据长度
-    int total_len = id_len + data_len;
-    
-    // 检查完整消息是否到达
-    if (device->recv_buffer->len < FRAME_HEADER_SIZE + total_len) {
-        return;  // 数据不完整，等待更多数据
-    }
-    
-    // 读取头部（从缓冲区移除）
-    app_buffer_read(device->recv_buffer, buf, FRAME_HEADER_SIZE);
-    
-    // 读取剩余数据（ID + 数据）
-    app_buffer_read(device->recv_buffer, buf + FRAME_HEADER_SIZE, total_len);
-    
-    int buf_len = FRAME_HEADER_SIZE + total_len;
-    
-    // 调用接收回调函数（带重试机制）
-    if (device->vptr && device->vptr->recv_callback) {
-        int retry = 0;
-        while (device->vptr->recv_callback(buf, buf_len) < 0 && retry < 3)
-        {
-            usleep(100000);  // 回调失败，等待100ms后重试
-            retry++;
+
+    // 方法1：单次任务内持续解析，直到没有完整帧
+    while (device->recv_buffer->len >= FRAME_HEADER_SIZE) {
+        // 先peek头部，不移除数据
+        if (app_buffer_peek(device->recv_buffer, header, FRAME_HEADER_SIZE) < FRAME_HEADER_SIZE) {
+            return;
         }
-        if (retry >= 3) {
-            log_error("Callback failed after 3 retries");
+
+        int connection_type = header[0];
+        int id_len = header[1];      // 设备标识长度
+        int data_len = header[2];    // 数据长度
+        int total_len = id_len + data_len;
+
+        // 类型异常：丢弃1字节，避免坏头阻塞后续帧
+        if (connection_type < CONNECTION_TYPE_NONE || connection_type > CONNECTION_TYPE_BLE_MESH) {
+            app_buffer_read(device->recv_buffer, header, 1);
+            log_warn("Discard invalid recv frame type: %d", connection_type);
+            continue;
+        }
+
+        // 长度异常：丢弃头部，避免死循环/越界
+        if (total_len < 0 || total_len > ((int)sizeof(buf) - FRAME_HEADER_SIZE)) {
+            app_buffer_read(device->recv_buffer, header, FRAME_HEADER_SIZE);
+            log_warn("Discard invalid recv frame length: id_len=%d, data_len=%d", id_len, data_len);
+            continue;
+        }
+
+        int required_len = FRAME_HEADER_SIZE + total_len;
+        // 帧不完整：正常等待；若缓冲区逼近上限则丢弃1字节尝试自恢复
+        if (device->recv_buffer->len < required_len) {
+            if (device->recv_buffer->len >= device->recv_buffer->size - FRAME_HEADER_SIZE) {
+                app_buffer_read(device->recv_buffer, header, 1);
+                log_warn("Discard stalled incomplete recv frame to prevent blocking: buffered=%d, need=%d",
+                         device->recv_buffer->len + 1, required_len);
+            }
+            return;
+        }
+
+        // 读取完整消息（头部 + 负载）
+        if (app_buffer_read(device->recv_buffer, buf, FRAME_HEADER_SIZE) != FRAME_HEADER_SIZE) {
+            return;
+        }
+        if (total_len > 0 &&
+            app_buffer_read(device->recv_buffer, buf + FRAME_HEADER_SIZE, total_len) != total_len) {
+            return;
+        }
+
+        int buf_len = FRAME_HEADER_SIZE + total_len;
+
+        // 调用接收回调函数（带重试机制）
+        if (device->vptr && device->vptr->recv_callback) {
+            int retry = 0;
+            while (device->vptr->recv_callback(buf, buf_len) < 0 && retry < 3)
+            {
+                usleep(100000);  // 回调失败，等待100ms后重试
+                retry++;
+            }
+            if (retry >= 3) {
+                log_error("Callback failed after 3 retries");
+            }
         }
     }
 }
