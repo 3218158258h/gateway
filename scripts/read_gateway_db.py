@@ -8,7 +8,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Read gateway sqlite database")
     parser.add_argument(
         "--db",
-        default=str(Path(__file__).resolve().parent / "messages.db"),
+        default=str(Path(__file__).resolve().parent.parent / "messages.db"),
         help="Path to sqlite db file (default: <project-root>/messages.db)",
     )
     parser.add_argument(
