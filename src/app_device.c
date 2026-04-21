@@ -139,7 +139,7 @@ static void *app_device_backgroundTask(void *argv)
  */
 static void app_device_defaultRecvTask(void *argv)
 {
-    unsigned char buf[1024];
+    unsigned char buf[RECV_TASK_BUF_SIZE];
     unsigned char header[FRAME_HEADER_SIZE];
     Device *device = argv;
 
@@ -176,11 +176,17 @@ static void app_device_defaultRecvTask(void *argv)
         int required_len = FRAME_HEADER_SIZE + total_len;
         // Incomplete frame: wait for more bytes; near-capacity stall triggers one-byte discard.
         if (device->recv_buffer->len < required_len) {
-            int stall_threshold = device->recv_buffer->size - RECV_STALLED_MARGIN;
-            if (device->recv_buffer->len > stall_threshold) {
+            if (device->recv_buffer->size <= RECV_STALLED_MARGIN) {
                 app_buffer_read(device->recv_buffer, header, 1);
-                log_warn("Discard stalled incomplete recv frame to prevent blocking: buffered=%d, need=%d",
-                         device->recv_buffer->len, required_len);
+                log_warn("Discard incomplete recv frame due to too-small buffer config: size=%d, need=%d",
+                         device->recv_buffer->size, required_len);
+            } else {
+                int stall_threshold = device->recv_buffer->size - RECV_STALLED_MARGIN;
+                if (device->recv_buffer->len > stall_threshold) {
+                    app_buffer_read(device->recv_buffer, header, 1);
+                    log_warn("Discard stalled incomplete recv frame to prevent blocking: buffered=%d, need=%d",
+                             device->recv_buffer->len, required_len);
+                }
             }
             return;
         }
