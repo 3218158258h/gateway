@@ -403,7 +403,7 @@ int app_bluetooth_preWrite(Device *device, void *ptr, int *len)
     }
 
     memcpy(&temp, ptr, 1);
-    if (temp != ctx->protocol.connection_type)
+    if (temp != (int)ctx->protocol.connection_type)
     {
         *len = 0;
         return 0;
