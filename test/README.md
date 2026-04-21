@@ -15,7 +15,7 @@ make -C test
 ## 发布 GatewayCommand（支持持续发布、递增载荷、设备类型）
 ```bash
 # 单一设备类型
-./publisher --device-type ble_mesh --count 100 --interval-ms 200 --start 1 --device-id 0001
+./publisher --device-type ble_mesh --count 100 --interval-ms 10 --start 1 --device-id 0001
 
 # 多设备类型循环发送
 ./publisher --type-seq ble_mesh,lora --count 100 --interval-ms 200
