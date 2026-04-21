@@ -160,32 +160,27 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
 
     if (*out_count == 0) {
         char single_device[MAX_DEVICE_PATH_LEN] = {0};
-        if (config_get_string(&cfg_mgr, "device", "single_device",
-                              "", single_device, sizeof(single_device)) == 0 &&
-            single_device[0] != '\0') {
-            char *trimmed = trim_whitespace(single_device);
-            if (!trimmed || trimmed[0] == '\0') {
-                log_error("Empty config: [device].single_device");
-                config_destroy(&cfg_mgr);
-                return -1;
+        int from_legacy = 0;
+        if (!(config_get_string(&cfg_mgr, "device", "single_device",
+                                "", single_device, sizeof(single_device)) == 0 &&
+              single_device[0] != '\0')) {
+            if (config_get_string(&cfg_mgr, "bluetooth", "device",
+                                  "", single_device, sizeof(single_device)) == 0 &&
+                single_device[0] != '\0') {
+                from_legacy = 1;
             }
-            snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
-            *out_count = 1;
         }
-    }
 
-    if (*out_count == 0) {
-        char single_device[MAX_DEVICE_PATH_LEN] = {0};
-        if (config_get_string(&cfg_mgr, "bluetooth", "device",
-                              "", single_device, sizeof(single_device)) == 0 &&
-            single_device[0] != '\0') {
+        if (single_device[0] != '\0') {
             char *trimmed = trim_whitespace(single_device);
             if (!trimmed || trimmed[0] == '\0') {
-                log_error("Empty legacy config: [bluetooth].device");
+                log_error("Empty config for single device path");
                 config_destroy(&cfg_mgr);
                 return -1;
             }
-            log_warn("Using legacy fallback [bluetooth].device; prefer [device].serial_devices or [device].single_device");
+            if (from_legacy) {
+                log_warn("Using legacy fallback [bluetooth].device; prefer [device].serial_devices or [device].single_device");
+            }
             snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
             *out_count = 1;
         }

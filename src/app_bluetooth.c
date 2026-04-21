@@ -328,7 +328,14 @@ int app_bluetooth_postRead(Device *device, void *ptr, int *len)
             
             int packet_len = ctx->read_buffer[frame_header_len];
             
-            int max_payload_len = READ_BUFFER_SIZE - frame_header_len - BT_LENGTH_FIELD_SIZE - frame_tail_len;
+            int fixed_overhead = frame_header_len + BT_LENGTH_FIELD_SIZE + frame_tail_len;
+            if (fixed_overhead >= READ_BUFFER_SIZE) {
+                log_error("Invalid protocol frame overhead: %d", fixed_overhead);
+                ctx->read_buffer_len = 0;
+                *len = 0;
+                return 0;
+            }
+            int max_payload_len = READ_BUFFER_SIZE - fixed_overhead;
             if (packet_len > max_payload_len ||
                 packet_len < id_len) {
                 log_error("Invalid packet length: %d", packet_len);
@@ -395,6 +402,7 @@ int app_bluetooth_preWrite(Device *device, void *ptr, int *len)
         return 0;
     }
 
+    unsigned char incoming_type = 0;
     int temp = 0;
     unsigned char buf[64];
     size_t cmd_prefix_len = strlen(ctx->protocol.mesh_cmd_prefix);
@@ -403,8 +411,8 @@ int app_bluetooth_preWrite(Device *device, void *ptr, int *len)
         return 0;
     }
 
-    memcpy(&temp, ptr, 1);
-    if (temp != (int)ctx->protocol.connection_type)
+    memcpy(&incoming_type, ptr, 1);
+    if ((ConnectionType)incoming_type != ctx->protocol.connection_type)
     {
         *len = 0;
         return 0;
