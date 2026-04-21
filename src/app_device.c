@@ -27,6 +27,7 @@
 #define DEFAULT_BUFFER_LEN 16384
 #define FRAME_HEADER_SIZE 3
 #define DEVICE_BUFFER_COUNT 2
+/* 至少预留1个头部长度空间；当缓冲逼近上限且帧仍不完整时，按1字节丢弃以防阻塞 */
 #define RECV_STALLED_MARGIN FRAME_HEADER_SIZE
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
 
@@ -175,10 +176,12 @@ static void app_device_defaultRecvTask(void *argv)
 
         // 读取完整消息（头部 + 负载）
         if (app_buffer_read(device->recv_buffer, buf, FRAME_HEADER_SIZE) != FRAME_HEADER_SIZE) {
+            log_warn("Failed to read recv frame header from buffer");
             return;
         }
         if (total_len > 0 &&
             app_buffer_read(device->recv_buffer, buf + FRAME_HEADER_SIZE, total_len) != total_len) {
+            log_warn("Failed to read recv frame payload from buffer: expected=%d", total_len);
             return;
         }
 
