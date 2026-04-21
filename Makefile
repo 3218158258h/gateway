@@ -29,8 +29,10 @@ BASE_SRCS = $(SRC_DIR)/app_config.c \
             $(SRC_DIR)/app_bluetooth.c \
             $(SRC_DIR)/app_buffer.c \
             $(SRC_DIR)/app_device.c \
+            $(SRC_DIR)/app_link_adapter.c \
             $(SRC_DIR)/app_message.c \
             $(SRC_DIR)/app_persistence.c \
+            $(SRC_DIR)/app_protocol_config.c \
             $(SRC_DIR)/app_router.c \
             $(SRC_DIR)/app_runner.c \
             $(SRC_DIR)/app_serial.c \

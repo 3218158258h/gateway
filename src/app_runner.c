@@ -12,7 +12,8 @@
 #include "../include/app_runner.h"
 #include "../include/app_task.h"
 #include "../include/app_serial.h"
-#include "../include/app_bluetooth.h"
+#include "../include/app_link_adapter.h"
+#include "../include/app_protocol_config.h"
 #include "../include/app_router.h"
 #include "../include/app_persistence.h"
 #include "../include/app_config.h"
@@ -88,12 +89,35 @@ static int parse_serial_device_list(char *list, char out_paths[][MAX_DEVICE_PATH
     return count;
 }
 
+static int parse_string_list(char *list, char out_values[][APP_PROTOCOL_NAME_MAX_LEN], int max_count)
+{
+    if (!list || !out_values || max_count <= 0) {
+        return 0;
+    }
+
+    int count = 0;
+    char *saveptr = NULL;
+    char *token = strtok_r(list, ",", &saveptr);
+    while (token && count < max_count) {
+        char *value = trim_whitespace(token);
+        if (value[0] != '\0') {
+            snprintf(out_values[count], APP_PROTOCOL_NAME_MAX_LEN, "%s", value);
+            count++;
+        }
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+    return count;
+}
+
 /**
  * @brief 从配置文件读取串口设备列表
  */
-static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_count)
+static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
+                              char out_interfaces[][APP_INTERFACE_NAME_MAX_LEN],
+                              char out_protocols[][APP_PROTOCOL_NAME_MAX_LEN],
+                              int *out_count)
 {
-    if (!out_paths || !out_count) {
+    if (!out_paths || !out_interfaces || !out_protocols || !out_count) {
         return -1;
     }
     
@@ -125,49 +149,85 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN], int *out_co
         int parsed = parse_serial_device_list(serial_devices, out_paths, max_devices);
         if (parsed > 0) {
             *out_count = parsed;
+        } else {
+            log_error("Invalid [device].serial_devices: %s", serial_devices);
             config_destroy(&cfg_mgr);
-            return 0;
+            return -1;
         }
-        log_error("Invalid [device].serial_devices: %s", serial_devices);
+    }
+
+    if (*out_count == 0) {
+        char single_device[MAX_DEVICE_PATH_LEN] = {0};
+        if (config_get_string(&cfg_mgr, "device", "single_device",
+                              "", single_device, sizeof(single_device)) == 0 &&
+            single_device[0] != '\0') {
+            char *trimmed = trim_whitespace(single_device);
+            if (!trimmed || trimmed[0] == '\0') {
+                log_error("Empty config: [device].single_device");
+                config_destroy(&cfg_mgr);
+                return -1;
+            }
+            snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
+            *out_count = 1;
+        }
+    }
+
+    if (*out_count == 0) {
+        char single_device[MAX_DEVICE_PATH_LEN] = {0};
+        if (config_get_string(&cfg_mgr, "bluetooth", "device",
+                              "", single_device, sizeof(single_device)) == 0 &&
+            single_device[0] != '\0') {
+            char *trimmed = trim_whitespace(single_device);
+            if (!trimmed || trimmed[0] == '\0') {
+                log_error("Empty legacy config: [bluetooth].device");
+                config_destroy(&cfg_mgr);
+                return -1;
+            }
+            log_warn("Using legacy fallback [bluetooth].device; prefer [device].serial_devices or [device].single_device");
+            snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
+            *out_count = 1;
+        }
+    }
+
+    if (*out_count == 0) {
+        log_error("Missing required config: [device].serial_devices or [device].single_device (legacy: [bluetooth].device)");
         config_destroy(&cfg_mgr);
         return -1;
     }
 
-    char single_device[MAX_DEVICE_PATH_LEN] = {0};
-    if (config_get_string(&cfg_mgr, "device", "single_device",
-                          "", single_device, sizeof(single_device)) == 0 &&
-        single_device[0] != '\0') {
-        char *trimmed = trim_whitespace(single_device);
-        if (!trimmed || trimmed[0] == '\0') {
-            log_error("Empty config: [device].single_device");
-            config_destroy(&cfg_mgr);
-            return -1;
-        }
-        snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
-        *out_count = 1;
-        config_destroy(&cfg_mgr);
-        return 0;
+    for (int i = 0; i < *out_count; i++) {
+        snprintf(out_interfaces[i], APP_INTERFACE_NAME_MAX_LEN, "%s", "serial");
+        snprintf(out_protocols[i], APP_PROTOCOL_NAME_MAX_LEN, "%s", "ble_mesh_default");
     }
 
-    if (config_get_string(&cfg_mgr, "bluetooth", "device",
-                          "", single_device, sizeof(single_device)) == 0 &&
-        single_device[0] != '\0') {
-        char *trimmed = trim_whitespace(single_device);
-        if (!trimmed || trimmed[0] == '\0') {
-            log_error("Empty legacy config: [bluetooth].device");
-            config_destroy(&cfg_mgr);
-            return -1;
+    char serial_interfaces[CONFIG_MAX_VALUE_LEN] = {0};
+    if (config_get_string(&cfg_mgr, "device", "serial_interfaces", "",
+                          serial_interfaces, sizeof(serial_interfaces)) == 0 &&
+        serial_interfaces[0] != '\0') {
+        char interfaces_copy[CONFIG_MAX_VALUE_LEN] = {0};
+        snprintf(interfaces_copy, sizeof(interfaces_copy), "%s", serial_interfaces);
+        char values[ROUTER_MAX_DEVICES][APP_PROTOCOL_NAME_MAX_LEN] = {{0}};
+        int parsed = parse_string_list(interfaces_copy, values, *out_count);
+        for (int i = 0; i < parsed && i < *out_count; i++) {
+            snprintf(out_interfaces[i], APP_INTERFACE_NAME_MAX_LEN, "%s", values[i]);
         }
-        log_warn("Using legacy fallback [bluetooth].device; prefer [device].serial_devices or [device].single_device");
-        snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
-        *out_count = 1;
-        config_destroy(&cfg_mgr);
-        return 0;
     }
 
-    log_error("Missing required config: [device].serial_devices or [device].single_device (legacy: [bluetooth].device)");
+    char serial_protocols[CONFIG_MAX_VALUE_LEN] = {0};
+    if (config_get_string(&cfg_mgr, "device", "serial_protocols", "",
+                          serial_protocols, sizeof(serial_protocols)) == 0 &&
+        serial_protocols[0] != '\0') {
+        char protocols_copy[CONFIG_MAX_VALUE_LEN] = {0};
+        snprintf(protocols_copy, sizeof(protocols_copy), "%s", serial_protocols);
+        char values[ROUTER_MAX_DEVICES][APP_PROTOCOL_NAME_MAX_LEN] = {{0}};
+        int parsed = parse_string_list(protocols_copy, values, *out_count);
+        for (int i = 0; i < parsed && i < *out_count; i++) {
+            snprintf(out_protocols[i], APP_PROTOCOL_NAME_MAX_LEN, "%s", values[i]);
+        }
+    }
+
     config_destroy(&cfg_mgr);
-    return -1;
+    return 0;
 }
 
 /**
@@ -393,8 +453,10 @@ int app_runner_run()
 
     // 从配置加载设备列表并初始化串口设备
     char device_paths[MAX_SERIAL_DEVICES][MAX_DEVICE_PATH_LEN];
+    char device_interfaces[MAX_SERIAL_DEVICES][APP_INTERFACE_NAME_MAX_LEN];
+    char device_protocols[MAX_SERIAL_DEVICES][APP_PROTOCOL_NAME_MAX_LEN];
     int configured_device_count = 0;
-    if (load_device_config(device_paths, &configured_device_count) != 0) {
+    if (load_device_config(device_paths, device_interfaces, device_protocols, &configured_device_count) != 0) {
         if (persistence.is_initialized) {
             persistence_close(&persistence);
         }
@@ -408,7 +470,7 @@ int app_runner_run()
 
     int initialized_device_count = 0;
     for (int i = 0; i < configured_device_count; i++) {
-        if (app_serial_init(&devices[i], device_paths[i]) != 0) {
+        if (app_link_adapter_init(&devices[i], device_paths[i], device_interfaces[i]) != 0) {
             log_error("Failed to init serial device: %s", device_paths[i]);
             for (int j = 0; j < initialized_device_count; j++) {
                 app_device_close((Device *)&devices[j]);
@@ -420,8 +482,9 @@ int app_runner_run()
             return -1;
         }
 
-        if (app_bluetooth_setConnectionType(&devices[i]) != 0) {
-            log_error("Failed to config bluetooth on device: %s", device_paths[i]);
+        if (app_link_adapter_apply_protocol(&devices[i], device_protocols[i]) != 0) {
+            log_error("Failed to apply protocol '%s' on device: %s",
+                      device_protocols[i], device_paths[i]);
             app_device_close((Device *)&devices[i]);
             for (int j = 0; j < initialized_device_count; j++) {
                 app_device_close((Device *)&devices[j]);
