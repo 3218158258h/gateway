@@ -168,7 +168,7 @@ static void app_device_defaultRecvTask(void *argv)
             if (device->recv_buffer->len >= device->recv_buffer->size - RECV_STALLED_MARGIN) {
                 app_buffer_read(device->recv_buffer, header, 1);
                 log_warn("Discard stalled incomplete recv frame to prevent blocking: buffered=%d, need=%d",
-                         device->recv_buffer->len + 1, required_len);
+                         device->recv_buffer->len, required_len);
             }
             return;
         }
