@@ -328,7 +328,8 @@ int app_bluetooth_postRead(Device *device, void *ptr, int *len)
             
             int packet_len = ctx->read_buffer[frame_header_len];
             
-            if (packet_len > READ_BUFFER_SIZE - frame_header_len - BT_LENGTH_FIELD_SIZE - frame_tail_len ||
+            int max_payload_len = READ_BUFFER_SIZE - frame_header_len - BT_LENGTH_FIELD_SIZE - frame_tail_len;
+            if (packet_len > max_payload_len ||
                 packet_len < id_len) {
                 log_error("Invalid packet length: %d", packet_len);
                 ctx->read_buffer_len = 0;

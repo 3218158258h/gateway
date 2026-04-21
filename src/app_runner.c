@@ -32,6 +32,8 @@
 #define DEFAULT_TASK_EXECUTORS 5
 #define DEFAULT_PERSIST_QUEUE_SIZE 10000
 #define DEFAULT_DEVICE_BUFFER_SIZE 16384
+#define DEFAULT_DEVICE_INTERFACE "serial"
+#define DEFAULT_DEVICE_PROTOCOL "ble_mesh_default"
 
 typedef struct RuntimeConfig {
     int thread_pool_executors;
@@ -196,8 +198,8 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
     }
 
     for (int i = 0; i < *out_count; i++) {
-        snprintf(out_interfaces[i], APP_INTERFACE_NAME_MAX_LEN, "%s", "serial");
-        snprintf(out_protocols[i], APP_PROTOCOL_NAME_MAX_LEN, "%s", "ble_mesh_default");
+        snprintf(out_interfaces[i], APP_INTERFACE_NAME_MAX_LEN, "%s", DEFAULT_DEVICE_INTERFACE);
+        snprintf(out_protocols[i], APP_PROTOCOL_NAME_MAX_LEN, "%s", DEFAULT_DEVICE_PROTOCOL);
     }
 
     char serial_interfaces[CONFIG_MAX_VALUE_LEN] = {0};
