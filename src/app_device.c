@@ -27,6 +27,7 @@
 #define DEFAULT_BUFFER_LEN 16384
 #define FRAME_HEADER_SIZE 3
 #define DEVICE_BUFFER_COUNT 2
+#define RECV_STALLED_MARGIN FRAME_HEADER_SIZE
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
 
 /**
@@ -164,7 +165,7 @@ static void app_device_defaultRecvTask(void *argv)
         int required_len = FRAME_HEADER_SIZE + total_len;
         // 帧不完整：正常等待；若缓冲区逼近上限则丢弃1字节尝试自恢复
         if (device->recv_buffer->len < required_len) {
-            if (device->recv_buffer->len >= device->recv_buffer->size - FRAME_HEADER_SIZE) {
+            if (device->recv_buffer->len >= device->recv_buffer->size - RECV_STALLED_MARGIN) {
                 app_buffer_read(device->recv_buffer, header, 1);
                 log_warn("Discard stalled incomplete recv frame to prevent blocking: buffered=%d, need=%d",
                          device->recv_buffer->len + 1, required_len);
