@@ -27,7 +27,8 @@
 #define DEFAULT_BUFFER_LEN 16384
 #define FRAME_HEADER_SIZE 3
 #define DEVICE_BUFFER_COUNT 2
-/* 至少预留1个头部长度空间；当缓冲逼近上限且帧仍不完整时，按1字节丢弃以防阻塞 */
+/* Reserve one header-length margin; when buffer nears capacity and frame is still incomplete,
+ * discard one byte to keep parser forward progress and avoid blocking. */
 #define RECV_STALLED_MARGIN FRAME_HEADER_SIZE
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
 
@@ -137,7 +138,7 @@ static void app_device_defaultRecvTask(void *argv)
         return;
     }
 
-    // 方法1：单次任务内持续解析，直到没有完整帧
+    // Method 1: drain all complete frames in this task invocation.
     while (device->recv_buffer->len >= FRAME_HEADER_SIZE) {
         // 先peek头部，不移除数据
         if (app_buffer_peek(device->recv_buffer, header, FRAME_HEADER_SIZE) < FRAME_HEADER_SIZE) {
@@ -149,14 +150,14 @@ static void app_device_defaultRecvTask(void *argv)
         int data_len = header[2];    // 数据长度
         int total_len = id_len + data_len;
 
-        // 类型异常：丢弃1字节，避免坏头阻塞后续帧
+        // Invalid type: discard one byte to avoid bad header blocking subsequent frames.
         if (connection_type < CONNECTION_TYPE_NONE || connection_type > CONNECTION_TYPE_BLE_MESH) {
             app_buffer_read(device->recv_buffer, header, 1);
             log_warn("Discard invalid recv frame type: %d", connection_type);
             continue;
         }
 
-        // 长度异常：丢弃头部，避免死循环/越界
+        // Invalid length: discard header to avoid dead loop / overflow risk.
         if (total_len < 0 || total_len > ((int)sizeof(buf) - FRAME_HEADER_SIZE)) {
             app_buffer_read(device->recv_buffer, header, FRAME_HEADER_SIZE);
             log_warn("Discard invalid recv frame length: id_len=%d, data_len=%d", id_len, data_len);
@@ -164,7 +165,7 @@ static void app_device_defaultRecvTask(void *argv)
         }
 
         int required_len = FRAME_HEADER_SIZE + total_len;
-        // 帧不完整：正常等待；若缓冲区逼近上限则丢弃1字节尝试自恢复
+        // Incomplete frame: wait for more bytes; near-capacity stall triggers one-byte discard.
         if (device->recv_buffer->len < required_len) {
             if (device->recv_buffer->len > device->recv_buffer->size - RECV_STALLED_MARGIN) {
                 app_buffer_read(device->recv_buffer, header, 1);
@@ -174,7 +175,7 @@ static void app_device_defaultRecvTask(void *argv)
             return;
         }
 
-        // 读取完整消息（头部 + 负载）
+        // Read full frame (header + payload).
         if (app_buffer_read(device->recv_buffer, buf, FRAME_HEADER_SIZE) != FRAME_HEADER_SIZE) {
             log_warn("Failed to read recv frame header from buffer");
             return;
@@ -187,7 +188,7 @@ static void app_device_defaultRecvTask(void *argv)
 
         int buf_len = FRAME_HEADER_SIZE + total_len;
 
-        // 调用接收回调函数（带重试机制）
+        // Invoke receive callback (with retry).
         if (device->vptr && device->vptr->recv_callback) {
             int retry = 0;
             while (device->vptr->recv_callback(buf, buf_len) < 0 && retry < 3)
