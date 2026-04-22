@@ -204,7 +204,7 @@ static int app_bluetooth_expand_cmd(const char *tmpl, char *out, size_t out_len,
     if (!tmpl || !out || out_len == 0) {
         return -1;
     }
-
+    out[0] = '\0'; /* 预置空字符串，确保出错返回时 out 始终处于已知状态 */
     size_t i = 0; /* 模板索引 */
     size_t j = 0; /* 输出索引 */
     while (tmpl[i] != '\0' && j < out_len - 1) {
