@@ -307,11 +307,19 @@ static int load_persistence_config(const ConfigManager *gateway_cfg, Persistence
 static void on_device_message_persist(RouterManager *router, Device *device,
                                        const void *data, size_t len)
 {
-    (void)router;
     (void)device;
-    // 保存消息到数据库
+    int qos = 1;
+
+    if (router) {
+        qos = router->transport.config.default_qos;
+        if (qos < 0) {
+            qos = 0;
+        }
+    }
+
+    /* 保存消息到数据库，QoS 与传输层默认配置保持一致。 */
     uint64_t msg_id;
-    if (persistence_save(&persistence, "GatewayData", data, len, 1, &msg_id) == 0) {
+    if (persistence_save(&persistence, "GatewayData", data, len, qos, &msg_id) == 0) {
         log_trace("Message persisted: id=%llu", (unsigned long long)msg_id);
     }
 }
