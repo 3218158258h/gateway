@@ -86,6 +86,8 @@ static void connection_lost(void *context, char *cause)
 static int message_arrived(void *context, char *topicName, int topicLen,
                            MQTTClient_message *message)
 {
+    (void)topicLen;  /* 当前实现未使用主题长度参数。 */
+
     MqttClient *client = (MqttClient *)context;
     if (!client) {
         MQTTClient_freeMessage(&message);

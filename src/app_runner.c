@@ -12,6 +12,7 @@
 #include "../include/app_runner.h"
 #include "../include/app_task.h"
 #include "../include/app_device_layer.h"
+#include "../include/app_link_adapter.h"
 #include "../include/app_protocol_config.h"
 #include "../include/app_router.h"
 #include "../include/app_persistence.h"
