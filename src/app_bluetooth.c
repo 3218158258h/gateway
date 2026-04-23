@@ -132,6 +132,11 @@ static int app_bluetooth_waitResponse(SerialDevice *serial_device, const Private
         return -1;
     }
 
+    /* 协议配置未提供 ACK 帧时，视为无需等待应答。 */
+    if (protocol->ack_frame_len <= 0) {
+        return 0;
+    }
+
     usleep(200000);
     unsigned char buf[READ_BUFFER_SIZE];
     ssize_t len = read(serial_device->super.fd, buf, sizeof(buf));

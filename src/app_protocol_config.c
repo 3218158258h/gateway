@@ -172,22 +172,25 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
         snprintf(config->mesh_cmd_prefix, sizeof(config->mesh_cmd_prefix), "%s", value);
     }
 
-    /* 解析状态检查指令（\r\n 字面量自动转义为实际字节） */
-    if (config_get_string(&cfg_mgr, section, "status_cmd", "", value, sizeof(value)) == 0 &&
-        value[0] != '\0') {
+    /* 解析状态检查指令（允许为空，空表示跳过状态检查） */
+    if (config_get_string(&cfg_mgr, section, "status_cmd", "", value, sizeof(value)) == 0) {
         snprintf(config->status_cmd, sizeof(config->status_cmd), "%s", value);
         app_private_protocol_unescape_cmd(config->status_cmd);
     }
 
-    /* 解析 ACK 帧（十六进制字节串，留空表示使用默认值） */
-    if (config_get_string(&cfg_mgr, section, "ack_frame", "", value, sizeof(value)) == 0 &&
-        value[0] != '\0') {
-        int ack_len = 0;
-        if (app_private_protocol_parse_hex_bytes(value, config->ack_frame, APP_PROTOCOL_MAX_FRAME_BYTES,
-                                                 &ack_len) == 0) {
-            config->ack_frame_len = ack_len;
+    /* 解析 ACK 帧（留空表示不等待 ACK） */
+    if (config_get_string(&cfg_mgr, section, "ack_frame", "", value, sizeof(value)) == 0) {
+        if (value[0] == '\0') {
+            memset(config->ack_frame, 0, sizeof(config->ack_frame));
+            config->ack_frame_len = 0;
         } else {
-            log_warn("Invalid %s.ack_frame=%s, fallback default", section, value);
+            int ack_len = 0;
+            if (app_private_protocol_parse_hex_bytes(value, config->ack_frame, APP_PROTOCOL_MAX_FRAME_BYTES,
+                                                     &ack_len) == 0) {
+                config->ack_frame_len = ack_len;
+            } else {
+                log_warn("Invalid %s.ack_frame=%s, fallback default", section, value);
+            }
         }
     }
 
