@@ -95,7 +95,7 @@ make -C test
 
 **测试方法**
 1. `gateway.ini` 设置 `transport.type=mqtt`，启动观察 30 分钟。
-2. 设置 `transport.type=dds`，使用 `make USE_DDS=1 DDS_HOME=...` 重新构建后启动观察 30 分钟。
+2. 设置 `transport.type=dds`，使用 `make`（或 `make DDS_HOME=...`）构建后启动观察 30 分钟。
 
 ```bash
 ./build/bin/gateway app
@@ -148,7 +148,7 @@ python3 scripts/simulate_lower_device.py --port /tmp/gateway-vdev/sim0 --device-
 **测试目标**：DDS 链路满足与 MQTT 同等级正确性。
 
 **测试方法**
-1. `make USE_DDS=1 DDS_HOME=...`
+1. `make`（如需自定义路径：`make DDS_HOME=...`）
 2. `make -C test` 后运行 publisher/subscriber。
 3. 验证 `GatewayData/GatewayCommand` 类型与 topic 对齐。
 

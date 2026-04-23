@@ -11,19 +11,17 @@
 
 仓库根目录：`<project-root>`
 
-### 1.1 普通构建（不启用DDS）
+### 1.1 标准构建（默认启用 DDS）
 ```bash
 cd <project-root>
 make
 ```
 
-### 1.2 启用DDS构建
+如 Cyclone DDS 安装路径不是默认值，可显式指定：
 ```bash
 cd <project-root>
-make USE_DDS=1 DDS_HOME=/path/to/cyclonedds/install
+make DDS_HOME=/path/to/cyclonedds/install
 ```
-
-> 说明：如果配置里使用 `transport.type=dds`，必须用 `USE_DDS=1` 重新构建，否则启动会失败并提示未编译DDS支持。
 
 ---
 
@@ -153,7 +151,7 @@ python3 scripts/read_gateway_db.py --db <db_path_from_gateway_ini> --limit 50
 ## 6. 常见问题
 
 ### Q1: `transport.type=dds` 启动失败
-通常是二进制未开启 DDS 编译（未使用 `make USE_DDS=1`）。
+通常是 Cyclone DDS 库路径配置不正确（检查 `DDS_HOME`、`LD_LIBRARY_PATH` 或系统库路径）。
 
 ### Q2: 启动日志太多
 当前已进一步精简高频日志：

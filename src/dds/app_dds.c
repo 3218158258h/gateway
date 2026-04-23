@@ -18,7 +18,7 @@
 #include <time.h>
 #include <dlfcn.h>
 
-/* 条件编译：是否启用Cyclone DDS */
+/* 编译期默认启用 Cyclone DDS；未定义时保留桩实现用于兼容测试环境。 */
 #ifdef USE_CYCLONE_DDS
 #include <dds/dds.h>
 #define DDS_ENABLED 1

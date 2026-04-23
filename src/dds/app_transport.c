@@ -314,7 +314,7 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
     // 初始化DDS客户端
     if (manager->config.type == TRANSPORT_TYPE_DDS) {
         if (!dds_is_compiled_enabled()) {
-            log_error("DDS transport requested but this binary was built without DDS support (rebuild with: make USE_DDS=1)");
+            log_error("DDS transport requested but DDS support is unavailable in current binary");
             return -1;
         }
         DdsManager *dds = malloc(sizeof(DdsManager));
