@@ -1,7 +1,7 @@
 /**
  * @file app_runner.c
- * @brief 网关主运行模块 - 系统初始化与主循环
- * 
+ * @brief 网关主运行模块，负责系统初始化与主循环
+ *
  * 功能说明：
  * - 系统启动初始化（线程池、持久化、设备、路由）
  * - 信号处理（优雅退出）
@@ -24,8 +24,8 @@
 #include <ctype.h>
 #include <stdlib.h>
 
-/* 默认配置常量 */
-#define DEFAULT_DB_PATH "gateway.db"                             // 默认数据库路径
+/* 默认配置常量。 */
+#define DEFAULT_DB_PATH "gateway.db"                             /* 默认数据库路径。 */
 #define MAX_SERIAL_DEVICES ROUTER_MAX_DEVICES
 #define MAX_DEVICE_PATH_LEN 256
 #define DEFAULT_TASK_EXECUTORS 5
@@ -38,15 +38,13 @@ typedef struct RuntimeConfig {
     int thread_pool_executors;
 } RuntimeConfig;
 
-/* 全局静态变量 */
-static SerialDevice devices[MAX_SERIAL_DEVICES];      // 串口设备实例数组
-static RouterManager router;                          // 路由管理器实例
-static PersistenceManager persistence;                // 消息持久化管理器实例
-static volatile sig_atomic_t stop_requested = 0;      // 停止请求标志（原子变量）
+/* 全局静态变量。 */
+static SerialDevice devices[MAX_SERIAL_DEVICES];      /* 串口设备实例数组。 */
+static RouterManager router;                          /* 路由管理器实例。 */
+static PersistenceManager persistence;                /* 消息持久化管理器实例。 */
+static volatile sig_atomic_t stop_requested = 0;      /* 停止请求标志（原子变量）。 */
 
-/**
- * @brief 去除字符串首尾空白字符
- */
+/* 去除字符串首尾空白字符。 */
 static char *trim_whitespace(char *str)
 {
     if (!str) {
@@ -66,9 +64,7 @@ static char *trim_whitespace(char *str)
     return str;
 }
 
-/**
- * @brief 解析逗号分隔的串口设备列表
- */
+/* 解析逗号分隔的串口设备列表。 */
 static int parse_serial_device_list(char *list, char out_paths[][MAX_DEVICE_PATH_LEN], int max_count)
 {
     if (!list || !out_paths || max_count <= 0) {
@@ -112,38 +108,26 @@ static int parse_string_list(char *list, char out_values[][APP_PROTOCOL_NAME_MAX
 /**
  * @brief 从配置文件读取串口设备列表
  */
-static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
+static int load_device_config(const ConfigManager *gateway_cfg,
+                              char out_paths[][MAX_DEVICE_PATH_LEN],
                               char out_interfaces[][APP_INTERFACE_NAME_MAX_LEN],
                               char out_protocols[][APP_PROTOCOL_NAME_MAX_LEN],
                               int *out_count,
                               int *out_buffer_size)
 {
-    if (!out_paths || !out_interfaces || !out_protocols || !out_count || !out_buffer_size) {
-        return -1;
-    }
-    
-    ConfigManager cfg_mgr = {0};
-    if (config_init(&cfg_mgr, APP_DEVICE_CONFIG_FILE) != 0) {
-        log_error("Failed to load device config file: %s", APP_DEVICE_CONFIG_FILE);
-        return -1;
-    }
-    if (config_load(&cfg_mgr) != 0) {
-        log_error("Failed to load device config file: %s", APP_DEVICE_CONFIG_FILE);
-        config_destroy(&cfg_mgr);
+    if (!gateway_cfg || !out_paths || !out_interfaces || !out_protocols || !out_count || !out_buffer_size) {
         return -1;
     }
 
-    *out_buffer_size = config_get_int(&cfg_mgr, "device", "buffer_size", DEFAULT_DEVICE_BUFFER_SIZE);
+    *out_buffer_size = config_get_int((ConfigManager *)gateway_cfg, "device", "buffer_size", DEFAULT_DEVICE_BUFFER_SIZE);
     if (*out_buffer_size <= 0) {
         log_error("Invalid config [device].buffer_size: %d", *out_buffer_size);
-        config_destroy(&cfg_mgr);
         return -1;
     }
 
-    int max_devices = config_get_int(&cfg_mgr, "device", "max_devices", ROUTER_MAX_DEVICES);
+    int max_devices = config_get_int((ConfigManager *)gateway_cfg, "device", "max_devices", ROUTER_MAX_DEVICES);
     if (max_devices <= 0) {
         log_error("Invalid config [device].max_devices: %d", max_devices);
-        config_destroy(&cfg_mgr);
         return -1;
     }
     if (max_devices > ROUTER_MAX_DEVICES) {
@@ -151,7 +135,7 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
     }
 
     char serial_devices[CONFIG_MAX_VALUE_LEN];
-    if (config_get_string(&cfg_mgr, "device", "serial_devices", "",
+    if (config_get_string((ConfigManager *)gateway_cfg, "device", "serial_devices", "",
                           serial_devices, sizeof(serial_devices)) == 0 &&
         serial_devices[0] != '\0') {
         int parsed = parse_serial_device_list(serial_devices, out_paths, max_devices);
@@ -159,14 +143,13 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
             *out_count = parsed;
         } else {
             log_error("Invalid [device].serial_devices: %s", serial_devices);
-            config_destroy(&cfg_mgr);
             return -1;
         }
     }
 
     if (*out_count == 0) {
         char single_device[MAX_DEVICE_PATH_LEN] = {0};
-        if (!(config_get_string(&cfg_mgr, "device", "single_device",
+        if (!(config_get_string((ConfigManager *)gateway_cfg, "device", "single_device",
                                 "", single_device, sizeof(single_device)) == 0 &&
               single_device[0] != '\0')) {
             single_device[0] = '\0';
@@ -176,7 +159,6 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
             char *trimmed = trim_whitespace(single_device);
             if (!trimmed || trimmed[0] == '\0') {
                 log_error("Empty config for single device path");
-                config_destroy(&cfg_mgr);
                 return -1;
             }
             snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
@@ -186,7 +168,6 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
 
     if (*out_count == 0) {
         log_error("Missing required config: [device].serial_devices or [device].single_device");
-        config_destroy(&cfg_mgr);
         return -1;
     }
 
@@ -196,7 +177,7 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
     }
 
     char serial_interfaces[CONFIG_MAX_VALUE_LEN] = {0};
-    if (config_get_string(&cfg_mgr, "device", "serial_interfaces", "",
+    if (config_get_string((ConfigManager *)gateway_cfg, "device", "serial_interfaces", "",
                           serial_interfaces, sizeof(serial_interfaces)) == 0 &&
         serial_interfaces[0] != '\0') {
         char interfaces_copy[CONFIG_MAX_VALUE_LEN] = {0};
@@ -209,7 +190,7 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
     }
 
     char serial_protocols[CONFIG_MAX_VALUE_LEN] = {0};
-    if (config_get_string(&cfg_mgr, "device", "serial_protocols", "",
+    if (config_get_string((ConfigManager *)gateway_cfg, "device", "serial_protocols", "",
                           serial_protocols, sizeof(serial_protocols)) == 0 &&
         serial_protocols[0] != '\0') {
         char protocols_copy[CONFIG_MAX_VALUE_LEN] = {0};
@@ -221,7 +202,6 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
         }
     }
 
-    config_destroy(&cfg_mgr);
     return 0;
 }
 
@@ -239,28 +219,15 @@ static void load_default_persistence_config(PersistenceConfig *config)
     config->max_queue_size = DEFAULT_PERSIST_QUEUE_SIZE;
 }
 
-static int load_runtime_config(RuntimeConfig *runtime)
+static int load_runtime_config(const ConfigManager *gateway_cfg, RuntimeConfig *runtime)
 {
-    if (!runtime) {
+    if (!gateway_cfg || !runtime) {
         return -1;
     }
 
     runtime->thread_pool_executors = DEFAULT_TASK_EXECUTORS;
-
-    ConfigManager cfg_mgr = {0};
-    if (config_init(&cfg_mgr, APP_RUNTIME_CONFIG_FILE) != 0) {
-        log_error("Failed to load runtime config file: %s", APP_RUNTIME_CONFIG_FILE);
-        return -1;
-    }
-    if (config_load(&cfg_mgr) != 0) {
-        log_error("Failed to load runtime config file: %s", APP_RUNTIME_CONFIG_FILE);
-        config_destroy(&cfg_mgr);
-        return -1;
-    }
-
     runtime->thread_pool_executors = config_get_int(
-        &cfg_mgr, "runtime", "thread_pool_executors", DEFAULT_TASK_EXECUTORS);
-    config_destroy(&cfg_mgr);
+        (ConfigManager *)gateway_cfg, "runtime", "thread_pool_executors", DEFAULT_TASK_EXECUTORS);
 
     if (runtime->thread_pool_executors <= 0) {
         log_error("Invalid config [runtime].thread_pool_executors: %d",
@@ -288,60 +255,40 @@ static void app_runner_signal_handler(int sig)
 }
 
 /**
- * @brief 从配置文件加载持久化配置
+ * @brief 从总配置加载持久化配置
  * 
- * 读取配置文件中的[persistence]节，获取数据库路径、
+ * 读取 gateway.ini 中的 [persistence] 节，获取数据库路径、
  * 最大重试次数、消息过期时间等配置项。
  * 如果配置文件加载失败，使用默认值。
  * 
  * @param config 输出配置结构体指针
- * @param config_file 配置文件路径
  * @return 0成功，-1失败
  */
-static int load_persistence_config(PersistenceConfig *config, const char *config_file)
+static int load_persistence_config(const ConfigManager *gateway_cfg, PersistenceConfig *config)
 {
-    if (!config || !config_file) {
+    if (!gateway_cfg || !config) {
         return -1;
     }
 
     load_default_persistence_config(config);
 
-    ConfigManager cfg_mgr = {0};
-    
-    // 初始化配置管理器
-    if (config_init(&cfg_mgr, config_file) != 0) {
-        log_warn("Failed to load config file, using defaults");
-        return 0;
-    }
-    
-    // 加载配置文件
-    if (config_load(&cfg_mgr) != 0) {
-        log_warn("Failed to load config file, using defaults");
-        config_destroy(&cfg_mgr);
-        return 0;
-    }
-    
     // 读取数据库路径配置
-    config_get_string(&cfg_mgr, "persistence", "db_path",
+    config_get_string((ConfigManager *)gateway_cfg, "persistence", "db_path",
                       DEFAULT_DB_PATH, config->db_path, sizeof(config->db_path));
     
     // 读取最大重试次数
-    config->max_retry_count = config_get_int(&cfg_mgr, "persistence", "max_retry", 3);
+    config->max_retry_count = config_get_int((ConfigManager *)gateway_cfg, "persistence", "max_retry", 3);
     
     // 读取消息过期时间（小时）
-    config->message_expire_hours = config_get_int(&cfg_mgr, "persistence", "expire_hours", 24);
+    config->message_expire_hours = config_get_int((ConfigManager *)gateway_cfg, "persistence", "expire_hours", 24);
     
     // 设置最大队列大小
-    config->max_queue_size = config_get_int(&cfg_mgr, "persistence", "max_queue_size",
+    config->max_queue_size = config_get_int((ConfigManager *)gateway_cfg, "persistence", "max_queue_size",
                                             DEFAULT_PERSIST_QUEUE_SIZE);
     if (config->max_queue_size <= 0) {
         log_error("Invalid config [persistence].max_queue_size: %d", config->max_queue_size);
-        config_destroy(&cfg_mgr);
         return -1;
     }
-    
-    // 销毁配置管理器
-    config_destroy(&cfg_mgr);
     return 0;
 }
 
@@ -433,7 +380,7 @@ int app_runner_run()
 
     // 初始化持久化模块
     PersistenceConfig persist_config;
-    if (load_persistence_config(&persist_config, APP_PERSISTENCE_CONFIG_FILE) != 0) {
+    if (load_persistence_config(&persist_config) != 0) {
         app_task_close();
         return -1;
     }

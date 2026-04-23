@@ -1,10 +1,10 @@
 /**
  * @file app_config.c
- * @brief 配置管理系统实现 - INI格式配置文件解析
- * 
+ * @brief 配置管理系统实现，负责 INI 配置的读取与保存
+ *
  * 功能说明：
- * - INI格式配置文件解析与保存
- * - 支持节[section]和键值对key=value
+ * - INI 格式配置文件解析与保存
+ * - 支持节 [section] 和键值对 key=value
  * - 支持字符串、整数、布尔值、浮点数类型
  * - 全局配置管理器支持
  */
@@ -15,9 +15,6 @@
 #include <string.h>
 #include <ctype.h>
 #include <strings.h>
-
-/* 全局配置管理器指针 */
-ConfigManager *g_config_manager = NULL;
 
 /**
  * @brief 安全复制字符串到缓冲区
@@ -40,26 +37,6 @@ static void copy_string_value(char *out_value, size_t max_len, const char *value
 }
 
 /**
- * @brief 获取全局配置管理器
- * 
- * @return 全局配置管理器指针
- */
-ConfigManager *config_get_global(void)
-{
-    return g_config_manager;
-}
-
-/**
- * @brief 设置全局配置管理器
- * 
- * @param config 配置管理器指针
- */
-void config_set_global(ConfigManager *config)
-{
-    g_config_manager = config;
-}
-
-/**
  * @brief 去除字符串首尾空白字符
  * 
  * @param str 输入字符串指针
@@ -69,17 +46,17 @@ static char *str_trim(char *str)
 {
     char *end;
     
-    // 去除前导空白
+    /* 去除前导空白。 */
     while (isspace((unsigned char)*str)) {
         str++;
     }
     
-    // 空字符串直接返回
+    /* 空字符串直接返回。 */
     if (*str == '\0') {
         return str;
     }
     
-    // 去除尾部空白
+    /* 去除尾部空白。 */
     end = str + strlen(str) - 1;
     while (end > str && isspace((unsigned char)*end)) {
         end--;
@@ -313,28 +290,6 @@ int config_save(ConfigManager *config)
 }
 
 /**
- * @brief 重新加载配置文件
- * 
- * 清空当前配置并重新从文件加载。
- * 
- * @param config 配置管理器指针
- * @return 0成功，-1失败
- */
-int config_reload(ConfigManager *config)
-{
-    if (!config) {
-        return -1;
-    }
-    
-    // 清空现有配置
-    config->item_count = 0;
-    config->is_loaded = 0;
-    
-    // 重新加载
-    return config_load(config);
-}
-
-/**
  * @brief 获取字符串配置值
  * 
  * 从指定节获取指定键的字符串值。
@@ -509,37 +464,3 @@ int config_set_bool(ConfigManager *config, const char *section, const char *key,
     return config_set_string(config, section, key, value ? "true" : "false");
 }
 
-/**
- * @brief 打印所有配置项
- * 
- * 用于调试，打印当前所有配置项。
- * 
- * @param config 配置管理器指针
- */
-void config_print_all(ConfigManager *config)
-{
-    if (!config) {
-        return;
-    }
-    
-    printf("=== Configuration (%s) ===\n", config->file_path);
-    printf("Total items: %d\n\n", config->item_count);
-    
-    char current_section[CONFIG_MAX_SECTION_LEN] = {0};
-    
-    // 遍历并打印所有配置项
-    for (int i = 0; i < config->item_count; i++) {
-        ConfigItem *item = &config->items[i];
-        
-        // 打印节名（如果与上一项不同）
-        if (strcmp(current_section, item->section) != 0) {
-            snprintf(current_section, sizeof(current_section), "%s", item->section);
-            printf("[%s]\n", item->section);
-        }
-        
-        // 打印键值对
-        printf("  %s = %s\n", item->key, item->value);
-    }
-    
-    printf("===========================\n");
-}

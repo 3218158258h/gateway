@@ -1,9 +1,9 @@
 /**
  * @file app_mqtt_v2.c
- * @brief MQTT客户端改进版实现 - 基于Paho MQTT库
- * 
+ * @brief MQTT 客户端实现，基于 Paho MQTT 库
+ *
  * 功能说明：
- * - MQTT连接管理与自动重连
+ * - MQTT 连接管理与自动重连
  * - 消息发布与订阅
  * - 指数退避重连策略
  * - 状态回调与事件通知
@@ -20,23 +20,19 @@
 #include <time.h>
 #include <errno.h>
 
-/* 使用paho-mqtt库 */
+/* 使用 Paho MQTT 库。 */
 #include <MQTTClient.h>
 
-/**
- * @brief MQTT内部结构体
- * 
- * 存储MQTT客户端的内部状态和资源。
- */
+/* MQTT 内部结构体，保存客户端状态和资源。 */
 typedef struct {
-    MQTTClient mqtt_client;         // MQTT客户端句柄
-    pthread_t thread;               // 后台线程
-    int running;                    // 运行标志
-    pthread_mutex_t lock;           // 状态锁
-    
-    /* 重连状态 */
-    int reconnect_delay;            // 当前重连延迟（秒）
-    time_t last_reconnect_time;     // 上次重连尝试时间
+    MQTTClient mqtt_client;         /* MQTT 客户端句柄。 */
+    pthread_t thread;               /* 后台线程。 */
+    int running;                    /* 运行标志。 */
+    pthread_mutex_t lock;           /* 状态锁。 */
+
+    /* 重连状态。 */
+    int reconnect_delay;            /* 当前重连延迟（秒）。 */
+    time_t last_reconnect_time;     /* 上次重连尝试时间。 */
 } MqttInternal;
 
 /**
@@ -57,15 +53,7 @@ static void mqtt_fill_default_config(MqttConfig *config)
     config->reconnect_max_attempts = 0;
 }
 
-/**
- * @brief 连接丢失回调
- * 
- * 当MQTT连接断开时由Paho库调用。
- * 更新状态并触发相关回调。
- * 
- * @param context 用户上下文（MqttClient指针）
- * @param cause 断开原因字符串
- */
+/* 连接丢失回调：断线后更新状态并触发回调。 */
 static void connection_lost(void *context, char *cause)
 {
     MqttClient *client = (MqttClient *)context;
@@ -75,36 +63,26 @@ static void connection_lost(void *context, char *cause)
     
     pthread_mutex_lock(&internal->lock);
     
-    // 更新状态为断开
+    /* 更新状态为断开。 */
     client->state = MQTT_STATE_DISCONNECTED;
-    // 重置重连延迟为最小值
+    /* 重置重连延迟为最小值。 */
     internal->reconnect_delay = client->config.reconnect_min_interval;
     
     pthread_mutex_unlock(&internal->lock);
     
     log_warn("MQTT connection lost: %s", cause ? cause : "unknown");
     
-    // 触发断开回调
+    /* 触发断开回调。 */
     if (client->on_disconnected) {
         client->on_disconnected(client);
     }
-    // 触发状态变化回调
+    /* 触发状态变化回调。 */
     if (client->on_state_changed) {
         client->on_state_changed(client, MQTT_STATE_DISCONNECTED);
     }
 }
 
-/**
- * @brief 消息到达回调
- * 
- * 当收到订阅主题的消息时由Paho库调用。
- * 
- * @param context 用户上下文（MqttClient指针）
- * @param topicName 消息主题
- * @param topicLen 主题长度
- * @param message 消息结构体
- * @return 1表示消息已处理
- */
+/* 消息到达回调：收到订阅主题的数据后转发给上层。 */
 static int message_arrived(void *context, char *topicName, int topicLen,
                            MQTTClient_message *message)
 {
@@ -117,7 +95,7 @@ static int message_arrived(void *context, char *topicName, int topicLen,
     
     log_debug("MQTT message received on topic: %s", topicName);
     
-    // 调用用户注册的消息回调
+    /* 调用用户注册的消息回调。 */
     if (client->on_message) {
         client->on_message(client, topicName, message->payload, message->payloadlen);
     }

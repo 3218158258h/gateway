@@ -22,10 +22,6 @@
 /* 默认配置常量 */
 #define ROUTER_DEFAULT_MESSAGE_SIZE 4096                          /* 默认消息缓冲区大小 */
 
-/* 全局路由管理器实例（用于单例模式） */
-static RouterManager g_router_instance;
-static RouterManager *g_router = NULL;
-
 /**
  * @brief 路由初始化失败统一清理
  */
@@ -307,65 +303,31 @@ static int on_device_message(void *ptr, int len)
  * @param config_file 配置文件路径，NULL则使用默认配置
  * @return 初始化结果，成功返回0，失败返回-1
  */
-int app_router_init(RouterManager *router, const char *config_file)
+static int app_router_init_from_loaded_config(RouterManager *router, const ConfigManager *cfg)
 {
-    if (!router) return -1;
-    
+    if (!router || !cfg) return -1;
+
     /* 初始化路由管理器结构体 */
     memset(router, 0, sizeof(RouterManager));
-    
+
     /* 初始化互斥锁 */
     if (pthread_mutex_init(&router->lock, NULL) != 0) {
         return -1;
     }
-    
+
     /* 初始化设备计数和状态 */
     router->device_count = 0;
     router->state = ROUTER_STATE_STOPPED;
     router->is_initialized = 0;
-    
-    const char *gateway_cfg_file = config_file ? config_file : APP_DEFAULT_CONFIG_FILE;
 
-    ConfigManager cfg;
     int transport_inited = 0;
-    int router_message_size = ROUTER_DEFAULT_MESSAGE_SIZE;
-    if (config_init(&cfg, gateway_cfg_file) != 0) {
-        log_error("Failed to load gateway config file: %s", gateway_cfg_file);
-        return router_init_fail(router, transport_inited);
-    }
+    int router_message_size = config_get_int((ConfigManager *)cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
 
-    if (config_load(&cfg) != 0) {
-        log_error("Failed to load gateway config file: %s", gateway_cfg_file);
-        config_destroy(&cfg);
-        return router_init_fail(router, transport_inited);
-    }
-
-    char router_cfg_file[CONFIG_MAX_PATH_LEN] = {0};
     char transport_cfg_file[CONFIG_MAX_PATH_LEN] = {0};
-    config_get_string(&cfg, "config_files", "router", APP_ROUTER_CONFIG_FILE,
-                      router_cfg_file, sizeof(router_cfg_file));
-    config_get_string(&cfg, "config_files", "transport", APP_TRANSPORT_CONFIG_FILE,
+    config_get_string((ConfigManager *)cfg, "config_files", "transport", APP_TRANSPORT_CONFIG_FILE,
                       transport_cfg_file, sizeof(transport_cfg_file));
-    if (router_cfg_file[0] == '\0') {
-        snprintf(router_cfg_file, sizeof(router_cfg_file), "%s", APP_ROUTER_CONFIG_FILE);
-    }
     if (transport_cfg_file[0] == '\0') {
         snprintf(transport_cfg_file, sizeof(transport_cfg_file), "%s", APP_TRANSPORT_CONFIG_FILE);
-    }
-
-    config_destroy(&cfg);
-
-    ConfigManager router_cfg;
-    if (config_init(&router_cfg, router_cfg_file) != 0) {
-        log_error("Failed to init router config file: %s", router_cfg_file);
-        return router_init_fail(router, transport_inited);
-    }
-    if (config_load(&router_cfg) != 0) {
-        log_warn("Failed to load router config file: %s, using default router settings", router_cfg_file);
-        config_destroy(&router_cfg);
-    } else {
-        router_message_size = config_get_int(&router_cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
-        config_destroy(&router_cfg);
     }
 
     if (router_message_size <= 0) {
@@ -373,7 +335,7 @@ int app_router_init(RouterManager *router, const char *config_file)
         return router_init_fail(router, transport_inited);
     }
     router->max_message_size = router_message_size;
-    
+
     TransportConfig transport_config = {0};
 
     /* 先加载网络侧协议配置，再初始化传输层 */
@@ -386,31 +348,42 @@ int app_router_init(RouterManager *router, const char *config_file)
         return router_init_fail(router, transport_inited);
     }
     transport_inited = 1;
-    
+
     /* 注册传输层回调函数 */
     transport_on_message(&router->transport, on_transport_message);
     transport_on_state_changed(&router->transport, on_transport_state_changed);
-    
-    /* 设置全局路由管理器指针 */
+
+    /* 设置初始化完成状态 */
     router->is_initialized = 1;
-    g_router = router;
     log_info("Router initialized: max_message_size=%d, max_devices=%d",
              router->max_message_size, ROUTER_MAX_DEVICES);
-    
+
     return 0;
 }
 
 /**
- * @brief 使用默认配置初始化路由管理器
- * 
- * 便捷函数，使用默认配置文件初始化路由管理器。
- * 
- * @param router 路由管理器指针
- * @return 初始化结果，成功返回0，失败返回-1
+ * @brief 初始化路由器（从配置文件）
+ * @param router 路由器指针
+ * @param config_file 配置文件路径（NULL使用默认）
+ * @return 0成功, -1失败
  */
-int app_router_init_default(RouterManager *router)
+int app_router_init(RouterManager *router, const char *config_file)
 {
-    return app_router_init(router, NULL);
+    const char *gateway_cfg_file = config_file ? config_file : APP_DEFAULT_CONFIG_FILE;
+    ConfigManager cfg = {0};
+    if (config_init(&cfg, gateway_cfg_file) != 0) {
+        log_error("Failed to load gateway config file: %s", gateway_cfg_file);
+        return -1;
+    }
+    if (config_load(&cfg) != 0) {
+        log_error("Failed to load gateway config file: %s", gateway_cfg_file);
+        config_destroy(&cfg);
+        return -1;
+    }
+
+    int result = app_router_init_from_loaded_config(router, &cfg);
+    config_destroy(&cfg);
+    return result;
 }
 
 /**
@@ -450,10 +423,6 @@ void app_router_close(RouterManager *router)
     /* 标记为未初始化 */
     router->is_initialized = 0;
     
-    /* 清除全局路由管理器指针 */
-    if (g_router == router) {
-        g_router = NULL;
-    }
 }
 
 /**
@@ -578,26 +547,6 @@ void app_router_stop(RouterManager *router)
     
     /* 断开传输层连接 */
     transport_disconnect(&router->transport);
-}
-
-/**
- * @brief 注册设备（单例模式便捷接口）
- * 
- * 使用全局路由管理器实例注册设备。
- * 如果全局实例未初始化，则自动初始化。
- * 
- * @param device 设备指针
- * @return 注册结果，成功返回0，失败返回-1
- */
-int app_router_registerDevice(Device *device)
-{
-    if (!g_router) {
-        if (app_router_init(&g_router_instance, NULL) != 0) {
-            return -1;
-        }
-        g_router = &g_router_instance;
-    }
-    return app_router_register_device(g_router, device);
 }
 
 /**

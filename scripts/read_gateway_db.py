@@ -22,7 +22,7 @@ def main() -> int:
     db_path = Path(args.db)
     if not db_path.exists():
         print(f"Database file not found: {db_path}")
-        print("Tip: use --db with [persistence].db_path from config/persistence.ini")
+        print("Tip: use --db with [persistence].db_path from gateway.ini")
         return 1
 
     conn = sqlite3.connect(str(db_path))

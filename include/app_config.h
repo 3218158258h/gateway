@@ -35,11 +35,6 @@
 /* 分层配置文件路径 */
 #define APP_TRANSPORT_CONFIG_FILE "config/transport.ini"
 #define APP_PHYSICAL_TRANSPORT_CONFIG_FILE "config/transport_physical.ini"
-#define APP_ROUTER_CONFIG_FILE "config/router.ini"
-#define APP_RUNTIME_CONFIG_FILE "config/runtime.ini"
-#define APP_PERSISTENCE_CONFIG_FILE "config/persistence.ini"
-#define APP_DEVICE_CONFIG_FILE "config/device.ini"
-#define APP_NETWORK_CONFIG_FILE "config/network.ini"
 
 /* 配置值类型 */
 typedef enum {
@@ -65,20 +60,6 @@ typedef struct ConfigManager {
     int item_count;                          /* 配置项数量 */
     int is_loaded;                           /* 是否已加载 */
 } ConfigManager;
-
-/* ========== 全局配置管理器 ========== */
-
-/**
- * @brief 获取全局配置管理器
- * @return 配置管理器指针
- */
-ConfigManager *config_get_global(void);
-
-/**
- * @brief 设置全局配置管理器
- * @param config 配置管理器指针
- */
-void config_set_global(ConfigManager *config);
 
 /* ========== 初始化与销毁 ========== */
 
@@ -111,13 +92,6 @@ int config_load(ConfigManager *config);
  * @return 0成功, -1失败
  */
 int config_save(ConfigManager *config);
-
-/**
- * @brief 重新加载配置文件(热加载)
- * @param config 配置管理器指针
- * @return 0成功, -1失败
- */
-int config_reload(ConfigManager *config);
 
 /* ========== 配置项读取 ========== */
 
@@ -201,13 +175,5 @@ int config_set_int(ConfigManager *config, const char *section, const char *key,
  */
 int config_set_bool(ConfigManager *config, const char *section, const char *key,
                     int value);
-
-/* ========== 调试功能 ========== */
-
-/**
- * @brief 打印所有配置项(调试用)
- * @param config 配置管理器指针
- */
-void config_print_all(ConfigManager *config);
 
 #endif /* __APP_CONFIG_H__ */

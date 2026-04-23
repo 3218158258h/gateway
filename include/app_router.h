@@ -14,6 +14,7 @@
 
 #include "app_device.h"
 #include "app_transport.h"
+#include "app_config.h"
 
 /* 最大设备数量 */
 #define ROUTER_MAX_DEVICES 32
@@ -24,13 +25,6 @@ typedef enum {
     ROUTER_STATE_RUNNING,
     ROUTER_STATE_ERROR
 } RouterState;
-
-/* 路由器配置 */
-typedef struct RouterConfig {
-    char config_file[256];      /* 配置文件路径 */
-    int max_devices;            /* 最大设备数量 */
-    int auto_start_transport;   /* 是否自动启动传输层 */
-} RouterConfig;
 
 /* 路由器统计信息 */
 typedef struct RouterStats {
@@ -70,11 +64,12 @@ typedef struct RouterManager {
 int app_router_init(RouterManager *router, const char *config_file);
 
 /**
- * @brief 使用默认配置初始化
+ * @brief 使用已加载的总配置初始化路由器
  * @param router 路由器指针
+ * @param gateway_config 已加载的 gateway.ini 配置
  * @return 0成功, -1失败
  */
-int app_router_init_default(RouterManager *router);
+int app_router_init_with_config(RouterManager *router, const ConfigManager *gateway_config);
 
 /**
  * @brief 关闭路由器
@@ -202,8 +197,5 @@ void app_router_on_cloud_message(RouterManager *router,
  */
 void app_router_on_state_changed(RouterManager *router,
     void (*callback)(RouterManager *, RouterState));
-
-int app_router_registerDevice(Device *device);
-
 
 #endif /* __APP_ROUTER_H__ */

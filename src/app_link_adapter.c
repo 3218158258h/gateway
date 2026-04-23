@@ -2,7 +2,7 @@
 #include "../thirdparty/log.c/log.h"
 
 /* 接口层初始化：根据 interface_name 判断接口类型并打开设备文件（目前仅支持串口/UART）。
- * 此函数只负责建立通信通道，不涉及任何设备层指令或协议细节。*/
+ * 这里只负责建立通信通道，不涉及任何设备层指令或协议细节。 */
 int app_link_adapter_init(SerialDevice *device, const char *device_path, const char *interface_name)
 {
     if (!device || !device_path || device_path[0] == '\0') {
@@ -24,7 +24,7 @@ int app_link_adapter_init(SerialDevice *device, const char *device_path, const c
 }
 
 /* 设备层配置：从 protocols.ini 加载协议参数，按序发送 init_cmds 完成设备初始化，
- * 并绑定 postRead/preWrite 钩子，使设备进入正常工作状态。*/
+ * 并绑定 postRead/preWrite 钩子，使设备进入正常工作状态。 */
 int app_link_adapter_apply_protocol(SerialDevice *device, const char *protocol_name)
 {
     if (!device) {

@@ -1,6 +1,6 @@
 /**
  * @file app_device.c
- * @brief 设备抽象层实现 - 通用设备管理框架
+ * @brief 设备抽象层实现，提供通用设备管理框架
  * 
  * 功能说明：
  * - 设备初始化与资源管理
@@ -23,14 +23,13 @@
 #include <time.h>
 #include <errno.h>
 
-/* 设备缓冲区大小（可通过配置覆盖） */
+/* 设备缓冲区大小（可通过配置覆盖）。 */
 #define DEFAULT_BUFFER_LEN 16384
 #define RECV_TASK_BUF_SIZE 1024
 #define FRAME_HEADER_SIZE 3
 #define DEVICE_BUFFER_COUNT 2
 #define MAX_FRAME_PAYLOAD_LEN (RECV_TASK_BUF_SIZE - FRAME_HEADER_SIZE)
-/* Reserve one header-length margin; when buffer nears capacity and frame is still incomplete,
- * discard one byte to keep parser forward progress and avoid blocking. */
+/* 保留一个帧头长度的余量；当缓冲区接近满且帧仍不完整时，丢弃一个字节推动解析前进。 */
 #define RECV_STALLED_MARGIN FRAME_HEADER_SIZE
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
 

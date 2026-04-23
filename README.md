@@ -43,26 +43,23 @@ cd <project-root>
 实际配置拆分到：
 - `config/transport.ini`
 - `config/transport_physical.ini`
-- `config/runtime.ini`
-- `config/router.ini`
-- `config/persistence.ini`
-- `config/device.ini`
-- `config/network.ini`
+- `config/protocols.ini`
+- `gateway.ini`
 
 ### 3.1 传输配置
 在 `config/transport.ini` 中设置 `[transport]` / `[mqtt]` / `[dds]`
 在 `config/transport_physical.ini` 中设置串口/CAN/SPI/I2C 等物理接口参数
 
 ### 3.2 运行时与路由
-- `config/runtime.ini`：线程池等运行时参数
-- `config/router.ini`：路由缓冲区参数
+- `gateway.ini` 的 `[runtime]`：线程池等运行时参数
+- `gateway.ini` 的 `[router]`：路由缓冲区参数
 
-### 3.3 设备与网络
-- `config/device.ini`：串口设备列表与设备缓冲区
-- `config/network.ini`：蓝牙模块运行参数（m_addr / net_id / baud_rate）
+### 3.3 设备与蓝牙
+- `gateway.ini` 的 `[device]`：串口设备列表与设备缓冲区
+- `gateway.ini` 的 `[bluetooth]`：蓝牙模块运行参数（m_addr / net_id / baud_rate）
 
 ### 3.4 持久化
-`config/persistence.ini` 包含 SQLite 数据库与队列参数
+`gateway.ini` 的 `[persistence]` 包含 SQLite 数据库与队列参数
 
 > 多蓝牙模块场景：每个蓝牙模块对应一个串口设备，把所有串口写到 `serial_devices`（逗号分隔）即可并行接入。
 
@@ -81,7 +78,7 @@ cd <project-root>
 ./scripts/create_virtual_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-map.tsv --types ble_mesh,lora
 ```
 
-脚本会输出 `gw` 端口列表，把它写进 `config/device.ini` 的 `[device].serial_devices`。
+脚本会输出 `gw` 端口列表，把它写进 `gateway.ini` 的 `[device].serial_devices`。
 并生成映射文件（列：`index type_name type_code gw_port sim_port socat_pid`），便于你按类型统计。
 
 ### 4.2 模拟下位机发消息
@@ -129,7 +126,7 @@ make -C test
 
 ## 5. 数据库查看（SQLite）
 
-数据库路径在 `config/persistence.ini` 的 `[persistence].db_path`。
+数据库路径在 `gateway.ini` 的 `[persistence].db_path`。
 
 ```bash
 sqlite3 <db_path_from_gateway_ini>
@@ -182,11 +179,7 @@ gateway/
 ├── config/
 │   ├── transport.ini
 │   ├── transport_physical.ini
-│   ├── runtime.ini
-│   ├── router.ini
-│   ├── persistence.ini
-│   ├── device.ini
-│   └── network.ini
+│   └── protocols.ini
 ├── test/
 ├── gateway.ini
 ├── scripts/

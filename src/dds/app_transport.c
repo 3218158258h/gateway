@@ -1,6 +1,6 @@
 /**
  * @file app_transport.c
- * @brief 网络协议层实现 - 统一 MQTT / DDS 接口
+ * @brief 网络协议层实现，统一 MQTT / DDS 接口
  *
  * 功能说明：
  * - 统一封装 MQTT 和 DDS 通信接口
@@ -18,7 +18,7 @@
 #include <string.h>
 #include <strings.h>
 
-/* 传输类型字符串数组 */
+/* 传输类型字符串数组。 */
 static const char *type_strings[] = {
     "mqtt", "dds", "auto"
 };
@@ -77,7 +77,7 @@ TransportType transport_string_to_type(const char *str)
 {
     if (!str) return TRANSPORT_TYPE_MQTT;
     
-    // 遍历匹配类型字符串
+    /* 遍历匹配类型字符串。 */
     for (int i = 0; i <= TRANSPORT_TYPE_AUTO; i++) {
         if (strcasecmp(str, type_strings[i]) == 0) {
             return (TransportType)i;

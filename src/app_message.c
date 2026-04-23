@@ -1,16 +1,16 @@
 /**
  * @file app_message.c
- * @brief 消息格式转换模块 - 二进制与JSON互转
- * 
+ * @brief 消息格式转换模块，负责二进制与 JSON 之间的互转
+ *
  * 功能说明：
  * - 二进制消息格式解析与构建
- * - JSON消息格式解析与构建
+ * - JSON 消息格式解析与构建
  * - 十六进制字符串与二进制数据互转
- * 
- * 消息格式（二进制）：
+ *
+ * 二进制消息格式：
  * | 连接类型(1字节) | ID长度(1字节) | 数据长度(1字节) | ID | 数据 |
- * 
- * 消息格式（JSON）：
+ *
+ * JSON 消息格式：
  * {"connection_type":1, "id":"AABBCC", "data":"112233"}
  */
 
@@ -21,12 +21,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/**
- * @brief 将十六进制字符转换为数值
- *
- * @param c 十六进制字符
- * @return 0-15为有效值，-1为非法字符
- */
+/* 将单个十六进制字符转换成数值。 */
 static int hex_char_to_value(char c)
 {
     if (c >= '0' && c <= '9') {
@@ -41,23 +36,14 @@ static int hex_char_to_value(char c)
     return -1;
 }
 
-/**
- * @brief 二进制数据转十六进制字符串
- * 
- * 将二进制数据转换为可读的十六进制字符串格式。
- * 例如：{0xAB, 0xCD} -> "ABCD"
- * 
- * @param binary 二进制数据指针
- * @param len 数据长度
- * @return 十六进制字符串指针（需调用方free），失败返回NULL
- */
+/* 二进制数据转十六进制字符串。 */
 static char *bin_to_str(unsigned char *binary, int len)
 {
     if (!binary || len <= 0) {
         return NULL;
     }
     
-    // 分配字符串内存（每字节对应2个十六进制字符）
+    /* 每个字节需要 2 个十六进制字符。 */
     char *hex_str = malloc(len * 2 + 1);
     if (!hex_str)
     {
@@ -65,7 +51,7 @@ static char *bin_to_str(unsigned char *binary, int len)
         return NULL;
     }
 
-    // 逐字节转换为十六进制
+    /* 逐字节转换为十六进制。 */
     for (int i = 0; i < len; i++)
     {
         snprintf(hex_str + i * 2, 3, "%02X", binary[i]);
@@ -74,17 +60,7 @@ static char *bin_to_str(unsigned char *binary, int len)
     return hex_str;
 }
 
-/**
- * @brief 十六进制字符串转二进制数据
- * 
- * 将十六进制字符串解析为二进制数据。
- * 例如："AABBCC" -> {0xAA, 0xBB, 0xCC}
- * 
- * @param hex_str 十六进制字符串
- * @param binary 输出二进制缓冲区
- * @param len 缓冲区大小
- * @return 转换后的二进制长度，失败返回-1
- */
+/* 十六进制字符串转二进制数据。 */
 static int str_to_bin(const char *hex_str, unsigned char *binary, int len)
 {
     if (!hex_str || !binary || len <= 0) {
@@ -93,14 +69,14 @@ static int str_to_bin(const char *hex_str, unsigned char *binary, int len)
     
     size_t hex_len = strlen(hex_str);
     
-    // 检查字符串长度是否为偶数
+    /* 十六进制字符串长度必须为偶数。 */
     if (hex_len % 2 != 0)
     {
         log_warn("Hex string is not valid");
         return -1;
     }
     
-    // 检查缓冲区是否足够
+    /* 目标缓冲区必须足够容纳转换结果。 */
     if (len < (int)(hex_len / 2))
     {
         log_warn("Buffer len is not enough");
@@ -109,11 +85,11 @@ static int str_to_bin(const char *hex_str, unsigned char *binary, int len)
     
     len = hex_len / 2;
     
-    // 逐字符解析十六进制
+    /* 按字节逐个解析。 */
     for (int i = 0; i < len; i++)
     {
-        char high = hex_str[i * 2];      // 高4位字符
-        char low = hex_str[i * 2 + 1];   // 低4位字符
+        char high = hex_str[i * 2];      /* 高 4 位字符。 */
+        char low = hex_str[i * 2 + 1];   /* 低 4 位字符。 */
         int high_value = hex_char_to_value(high);
         if (high_value < 0) {
             log_warn("Invalid hex character: %c", high);

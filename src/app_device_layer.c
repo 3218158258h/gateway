@@ -20,6 +20,9 @@ typedef struct DeviceLayerRuntimeConfigStruct {
     SerialBaudRate work_baud;
 } DeviceLayerRuntimeConfig;
 
+static DeviceLayerRuntimeConfig g_runtime_config;
+static int g_runtime_config_loaded = 0;
+
 static void app_device_layer_set_state(Device *device, DeviceState state)
 {
     if (!device) {
@@ -34,6 +37,11 @@ static int app_device_layer_load_runtime_config(DeviceLayerRuntimeConfig *runtim
         return -1;
     }
 
+    if (g_runtime_config_loaded) {
+        *runtime = g_runtime_config;
+        return 0;
+    }
+
     /* 先加载默认值，确保配置缺失时仍有可运行的兜底参数。 */
     snprintf(runtime->m_addr, sizeof(runtime->m_addr), "%s", DEVICE_LAYER_DEFAULT_MADDR);
     snprintf(runtime->net_id, sizeof(runtime->net_id), "%s", DEVICE_LAYER_DEFAULT_NETID);
@@ -42,7 +50,7 @@ static int app_device_layer_load_runtime_config(DeviceLayerRuntimeConfig *runtim
         : SERIAL_BAUD_RATE_115200;
 
     ConfigManager cfg_mgr = {0};
-    if (config_init(&cfg_mgr, APP_NETWORK_CONFIG_FILE) != 0) {
+    if (config_init(&cfg_mgr, APP_GATEWAY_CONFIG_FILE) != 0) {
         return 0;
     }
     if (config_load(&cfg_mgr) != 0) {
@@ -51,7 +59,7 @@ static int app_device_layer_load_runtime_config(DeviceLayerRuntimeConfig *runtim
     }
 
     char value[CONFIG_MAX_VALUE_LEN] = {0};
-    /* 运行参数来自 network.ini 的 bluetooth 节，避免写死在设备逻辑里。 */
+    /* 运行参数来自 gateway.ini 的 bluetooth 节，避免写死在设备逻辑里。 */
     if (config_get_string(&cfg_mgr, "bluetooth", "m_addr", DEVICE_LAYER_DEFAULT_MADDR,
                           value, sizeof(value)) == 0 && strlen(value) == DEVICE_LAYER_ADDR_LEN) {
         snprintf(runtime->m_addr, sizeof(runtime->m_addr), "%s", value);
@@ -69,6 +77,8 @@ static int app_device_layer_load_runtime_config(DeviceLayerRuntimeConfig *runtim
     }
 
     config_destroy(&cfg_mgr);
+    g_runtime_config = *runtime;
+    g_runtime_config_loaded = 1;
     return 0;
 }
 
@@ -178,25 +188,6 @@ int app_device_layer_configure(SerialDevice *device, const char *protocol_name)
     return app_device_layer_apply_protocol(device, protocol_name);
 }
 
-int app_device_layer_prepare(SerialDevice *device, const char *device_path,
-                             const char *interface_name, const char *protocol_name)
-{
-    if (!device) {
-        return -1;
-    }
-    if (app_device_layer_init(device, device_path, interface_name) != 0) {
-        app_device_layer_close(&device->super);
-        app_device_layer_set_state(&device->super, DEVICE_STATE_ERROR);
-        return -1;
-    }
-    if (app_device_layer_configure(device, protocol_name) != 0) {
-        app_device_layer_close(&device->super);
-        app_device_layer_set_state(&device->super, DEVICE_STATE_ERROR);
-        return -1;
-    }
-    return 0;
-}
-
 int app_device_layer_start(Device *device)
 {
     if (!device) {
@@ -230,31 +221,6 @@ int app_device_layer_stop(Device *device)
     if (state != DEVICE_STATE_ERROR) {
         app_device_layer_set_state(device, DEVICE_STATE_STOPPED);
     }
-    return 0;
-}
-
-int app_device_layer_reset(SerialDevice *device, const char *protocol_name)
-{
-    if (!device) {
-        return -1;
-    }
-
-    DeviceState state = app_device_get_state(&device->super);
-    if (state == DEVICE_STATE_UNINITIALIZED || state == DEVICE_STATE_RUNNING ||
-        state == DEVICE_STATE_ERROR) {
-        return -1;
-    }
-
-    if (app_bluetooth_reset(device) != 0) {
-        app_device_layer_set_state(&device->super, DEVICE_STATE_ERROR);
-        return -1;
-    }
-
-    if (protocol_name && protocol_name[0] != '\0') {
-        return app_device_layer_configure(device, protocol_name);
-    }
-
-    app_device_layer_set_state(&device->super, DEVICE_STATE_INITIALIZED);
     return 0;
 }
 

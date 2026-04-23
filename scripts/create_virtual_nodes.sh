@@ -143,7 +143,7 @@ done
 serial_devices="$(awk -F'\t' '{print $4}' "$MAP_FILE" | paste -sd, -)"
 
 echo
-echo "[NEXT] config/device.ini [device].serial_devices ="
+echo "[NEXT] gateway.ini [device].serial_devices ="
 echo "       $serial_devices"
 echo "[INFO] map file: $MAP_FILE"
 echo "[INFO] each pair's socat log: /tmp/gateway-vnodes-socat-<idx>.log"

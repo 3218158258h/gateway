@@ -67,14 +67,6 @@ typedef struct PersistenceManager {
 int persistence_init(PersistenceManager *manager, const PersistenceConfig *config);
 
 /**
- * @brief 使用默认配置初始化
- * @param manager 管理器指针
- * @param db_path 数据库路径
- * @return 0成功, -1失败
- */
-int persistence_init_default(PersistenceManager *manager, const char *db_path);
-
-/**
  * @brief 关闭持久化管理器
  * @param manager 管理器指针
  */

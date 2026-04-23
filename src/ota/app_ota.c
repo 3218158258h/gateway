@@ -1,10 +1,10 @@
 /**
  * @file app_ota.c
- * @brief A/B分区OTA升级系统实现
- * 
+ * @brief A/B 分区 OTA 升级系统实现
+ *
  * 功能说明：
- * - A/B分区双备份升级方案
- * - RSA签名验证确保固件安全
+ * - A/B 分区双备份升级方案
+ * - RSA 签名验证确保固件安全
  * - 自动回滚机制
  * - 下载进度回调
  * - 状态机管理升级流程
@@ -26,30 +26,27 @@
 #include <openssl/pem.h>
 #include <openssl/err.h>
 
-#define OTA_CONFIG_FILE "/etc/gateway/boot.conf" // OTA启动配置文件路径
-#define OTA_CONFIG_PUBLIC_KEY "/etc/gateway/public.key" // OTA公钥路径
-#define OTA_CONFIG_VERSION_FILE "/etc/gateway/version" // OTA版本文件路径
-#define OTA_CONFIG_PARTITION_A "/dev/mmcblk0p2" // 默认A分区设备
-#define OTA_CONFIG_PARTITION_B "/dev/mmcblk0p3" // 默认B分区设备
+#define OTA_CONFIG_FILE "/etc/gateway/boot.conf" /* OTA 启动配置文件路径。 */
+#define OTA_CONFIG_PUBLIC_KEY "/etc/gateway/public.key" /* OTA 公钥路径。 */
+#define OTA_CONFIG_VERSION_FILE "/etc/gateway/version" /* OTA 版本文件路径。 */
+#define OTA_CONFIG_PARTITION_A "/dev/mmcblk0p2" /* 默认 A 分区设备。 */
+#define OTA_CONFIG_PARTITION_B "/dev/mmcblk0p3" /* 默认 B 分区设备。 */
 
-/* 启动配置文件格式常量 */
-#define BOOT_CONFIG_MAGIC   0x4F544142  // 魔数"OTAB"，用于校验配置文件
-#define BOOT_CONFIG_VERSION 1            // 配置文件版本号
+/* 启动配置文件格式常量。 */
+#define BOOT_CONFIG_MAGIC   0x4F544142  /* 魔数 "OTAB"，用于校验配置文件。 */
+#define BOOT_CONFIG_VERSION 1            /* 配置文件版本号。 */
 
-/**
- * @brief 启动配置结构体
- * 存储在/etc/gateway/boot.conf中，用于记录当前活跃分区和升级状态。
- */
+/* 启动配置结构体：记录当前活跃分区和升级状态。 */
 typedef struct {
-    uint32_t magic;              // 魔数，用于校验配置有效性
-    uint32_t version;            // 配置版本
-    uint32_t active_partition;   // 当前活跃分区：0=A分区，1=B分区
-    uint32_t boot_count;         // 从该分区启动的次数
-    uint32_t upgrade_pending;    // 是否有待处理的升级：0=无，1=有
-    uint32_t checksum;           // 校验和
+    uint32_t magic;              /* 魔数，用于校验配置有效性。 */
+    uint32_t version;            /* 配置版本。 */
+    uint32_t active_partition;   /* 当前活跃分区：0=A 分区，1=B 分区。 */
+    uint32_t boot_count;         /* 从该分区启动的次数。 */
+    uint32_t upgrade_pending;    /* 是否有待处理的升级：0=无，1=有。 */
+    uint32_t checksum;           /* 校验和。 */
 } BootConfig;
 
-/* OTA状态字符串数组，用于日志输出 */
+/* OTA 状态字符串数组，用于日志输出。 */
 static const char *state_strings[] = {
     "IDLE",        // 空闲
     "CHECKING",    // 检查更新中
@@ -62,11 +59,7 @@ static const char *state_strings[] = {
     "ROLLBACK"     // 回滚中
 };
 
-/**
- * @brief 获取OTA状态字符串
- * @param state OTA状态枚举值
- * @return 状态字符串
- */
+/* 获取 OTA 状态字符串。 */
 const char *ota_statestr(OtaState state)
 {
     if (state >= OTA_STATE_IDLE && state <= OTA_STATE_ROLLBACK) {
@@ -75,7 +68,7 @@ const char *ota_statestr(OtaState state)
     return "UNKNOWN";
 }
 
-/* OTA错误字符串数组，用于错误信息输出 */
+/* OTA 错误字符串数组，用于错误信息输出。 */
 static const char *error_strings[] = {
     "OK",                          // 成功
     "Network error",               // 网络错误
