@@ -353,8 +353,20 @@ int app_router_init(RouterManager *router, const char *config_file)
         snprintf(transport_cfg_file, sizeof(transport_cfg_file), "%s", APP_TRANSPORT_CONFIG_FILE);
     }
 
-    router_message_size = config_get_int(&cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
     config_destroy(&cfg);
+
+    ConfigManager router_cfg;
+    if (config_init(&router_cfg, router_cfg_file) != 0) {
+        log_error("Failed to init router config file: %s", router_cfg_file);
+        return router_init_fail(router, transport_inited);
+    }
+    if (config_load(&router_cfg) != 0) {
+        log_warn("Failed to load router config file: %s, using default router settings", router_cfg_file);
+        config_destroy(&router_cfg);
+    } else {
+        router_message_size = config_get_int(&router_cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
+        config_destroy(&router_cfg);
+    }
 
     if (router_message_size <= 0) {
         log_error("Invalid config [router].max_message_size: %d", router_message_size);

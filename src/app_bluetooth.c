@@ -338,14 +338,22 @@ int app_bluetooth_preWrite(Device *device, void *ptr, int *len)
         return 0;
     }
 
-    unsigned char buf[64];
-    int built_len = app_private_protocol_build_command(&ctx->protocol, ptr, *len, buf, (int)sizeof(buf));
+    size_t command_cap = strlen(ctx->protocol.mesh_cmd_prefix) + (size_t)*len + 4;
+    unsigned char *buf = malloc(command_cap);
+    if (!buf) {
+        *len = 0;
+        return 0;
+    }
+
+    int built_len = app_private_protocol_build_command(&ctx->protocol, ptr, *len, buf, (int)command_cap);
     if (built_len < 0) {
+        free(buf);
         *len = 0;
         return 0;
     }
 
     *len = built_len;
     memcpy(ptr, buf, (size_t)*len);
+    free(buf);
     return 0;
 }

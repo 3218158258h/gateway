@@ -173,9 +173,9 @@ int transport_load_config(TransportConfig *config, const char *config_file)
             config_destroy(&cfg);
             return -1;
         }
-        if (mqtt_ready && !dds_ready) {
+        if (mqtt_ready) {
             config->type = TRANSPORT_TYPE_MQTT;
-        } else if (!mqtt_ready && dds_ready) {
+        } else if (dds_ready) {
             config->type = TRANSPORT_TYPE_DDS;
         }
     }
