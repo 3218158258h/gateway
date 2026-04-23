@@ -22,6 +22,9 @@
 /* 默认配置常量 */
 #define ROUTER_DEFAULT_MESSAGE_SIZE 4096                          /* 默认消息缓冲区大小 */
 
+/* 当前路由器实例，用于设备回调转发。 */
+static RouterManager *g_router = NULL;
+
 /**
  * @brief 路由初始化失败统一清理
  */
@@ -355,6 +358,7 @@ static int app_router_init_from_loaded_config(RouterManager *router, const Confi
 
     /* 设置初始化完成状态 */
     router->is_initialized = 1;
+    g_router = router;
     log_info("Router initialized: max_message_size=%d, max_devices=%d",
              router->max_message_size, ROUTER_MAX_DEVICES);
 
@@ -384,6 +388,11 @@ int app_router_init(RouterManager *router, const char *config_file)
     int result = app_router_init_from_loaded_config(router, &cfg);
     config_destroy(&cfg);
     return result;
+}
+
+int app_router_init_with_config(RouterManager *router, const ConfigManager *gateway_config)
+{
+    return app_router_init_from_loaded_config(router, gateway_config);
 }
 
 /**
@@ -422,7 +431,10 @@ void app_router_close(RouterManager *router)
     
     /* 标记为未初始化 */
     router->is_initialized = 0;
-    
+    if (g_router == router) {
+        g_router = NULL;
+    }
+
 }
 
 /**

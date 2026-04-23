@@ -356,8 +356,20 @@ int app_runner_run()
     signal(SIGINT, app_runner_signal_handler);
     signal(SIGTERM, app_runner_signal_handler);
 
+    ConfigManager gateway_cfg = {0};
+    if (config_init(&gateway_cfg, APP_GATEWAY_CONFIG_FILE) != 0) {
+        log_error("Failed to load gateway config file: %s", APP_GATEWAY_CONFIG_FILE);
+        return -1;
+    }
+    if (config_load(&gateway_cfg) != 0) {
+        log_error("Failed to load gateway config file: %s", APP_GATEWAY_CONFIG_FILE);
+        config_destroy(&gateway_cfg);
+        return -1;
+    }
+
     RuntimeConfig runtime_config;
-    if (load_runtime_config(&runtime_config) != 0) {
+    if (load_runtime_config(&gateway_cfg, &runtime_config) != 0) {
+        config_destroy(&gateway_cfg);
         return -1;
     }
 
@@ -367,20 +379,23 @@ int app_runner_run()
     char device_interfaces[MAX_SERIAL_DEVICES][APP_INTERFACE_NAME_MAX_LEN];
     char device_protocols[MAX_SERIAL_DEVICES][APP_PROTOCOL_NAME_MAX_LEN];
 
-    if (load_device_config(device_paths, device_interfaces, device_protocols,
+    if (load_device_config(&gateway_cfg, device_paths, device_interfaces, device_protocols,
                            &configured_device_count, &device_buffer_size) != 0) {
+        config_destroy(&gateway_cfg);
         return -1;
     }
     app_device_set_buffer_size(device_buffer_size);
 
     // 初始化线程池
     if (app_task_init(runtime_config.thread_pool_executors) != 0) {
+        config_destroy(&gateway_cfg);
         return -1;
     }
 
     // 初始化持久化模块
     PersistenceConfig persist_config;
-    if (load_persistence_config(&persist_config) != 0) {
+    if (load_persistence_config(&gateway_cfg, &persist_config) != 0) {
+        config_destroy(&gateway_cfg);
         app_task_close();
         return -1;
     }
@@ -411,6 +426,7 @@ int app_runner_run()
                 persistence_close(&persistence);
             }
             app_task_close();
+            config_destroy(&gateway_cfg);
             return -1;
         }
 
@@ -425,6 +441,7 @@ int app_runner_run()
                 persistence_close(&persistence);
             }
             app_task_close();
+            config_destroy(&gateway_cfg);
             return -1;
         }
 
@@ -432,7 +449,8 @@ int app_runner_run()
     }
 
     // 初始化路由管理器
-    if (app_router_init(&router, NULL) != 0) {
+    if (app_router_init_with_config(&router, &gateway_cfg) != 0) {
+        config_destroy(&gateway_cfg);
         for (int i = 0; i < initialized_device_count; i++) {
             app_device_layer_close((Device *)&devices[i]);
         }
@@ -449,11 +467,12 @@ int app_runner_run()
             for (int j = 0; j < initialized_device_count; j++) {
                 app_device_layer_close((Device *)&devices[j]);
             }
+            app_task_close();
             app_router_close(&router);
             if (persistence.is_initialized) {
                 persistence_close(&persistence);
             }
-            app_task_close();
+            config_destroy(&gateway_cfg);
             return -1;
         }
     }
@@ -466,11 +485,12 @@ int app_runner_run()
 
     // 启动路由管理器（连接云端、启动设备）
     if (app_router_start(&router) != 0) {
+        app_task_close();
         app_router_close(&router);
         if (persistence.is_initialized) {
             persistence_close(&persistence);
         }
-        app_task_close();
+        config_destroy(&gateway_cfg);
         return -1;
     }
 
@@ -479,16 +499,17 @@ int app_runner_run()
 
     // 停止路由管理器
     app_router_stop(&router);
-    app_router_close(&router);
 
     // 清理已发送的消息
     if (persistence.is_initialized) {
         persistence_cleanup_sent(&persistence);
         persistence_close(&persistence);
     }
-    
-    // 关闭线程池
+
+    // 先关闭线程池，确保不会再有设备回调访问路由状态
     app_task_close();
+    app_router_close(&router);
+    config_destroy(&gateway_cfg);
 
     return 0;
 }

@@ -51,10 +51,14 @@ static int app_device_layer_load_runtime_config(DeviceLayerRuntimeConfig *runtim
 
     ConfigManager cfg_mgr = {0};
     if (config_init(&cfg_mgr, APP_GATEWAY_CONFIG_FILE) != 0) {
+        g_runtime_config = *runtime;
+        g_runtime_config_loaded = 1;
         return 0;
     }
     if (config_load(&cfg_mgr) != 0) {
         config_destroy(&cfg_mgr);
+        g_runtime_config = *runtime;
+        g_runtime_config_loaded = 1;
         return 0;
     }
 
