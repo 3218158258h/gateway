@@ -2,22 +2,10 @@
 #define __APP_LINK_ADAPTER_H__
 
 #include "app_serial.h"
+#include "app_device_layer.h"
 
 /* 接口类型名称最大长度 */
 #define APP_INTERFACE_NAME_MAX_LEN 16
-
-/**
- * @brief 物理接口类型枚举
- *
- * 定义网关支持的设备物理接口类型。
- * 当前已实现 SERIAL（串口/UART），其余为预留扩展。
- */
-typedef enum AppInterfaceTypeEnum {
-    APP_INTERFACE_SERIAL = 0, /* 串口 / UART */
-    APP_INTERFACE_SPI,        /* SPI 总线（预留） */
-    APP_INTERFACE_I2C,        /* I2C 总线（预留） */
-    APP_INTERFACE_CAN         /* CAN 总线（预留） */
-} AppInterfaceType;
 
 /**
  * @brief 接口层初始化：根据接口类型打开设备文件描述符

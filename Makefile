@@ -29,9 +29,11 @@ BASE_SRCS = $(SRC_DIR)/app_config.c \
             $(SRC_DIR)/app_bluetooth.c \
             $(SRC_DIR)/app_buffer.c \
             $(SRC_DIR)/app_device.c \
+            $(SRC_DIR)/app_device_layer.c \
             $(SRC_DIR)/app_link_adapter.c \
             $(SRC_DIR)/app_message.c \
             $(SRC_DIR)/app_persistence.c \
+            $(SRC_DIR)/app_private_protocol.c \
             $(SRC_DIR)/app_protocol_config.c \
             $(SRC_DIR)/app_router.c \
             $(SRC_DIR)/app_runner.c \
@@ -172,10 +174,12 @@ clean:
 install: $(TARGET_BIN)
 	install -d /usr/local/bin
 	install -d /etc/gateway
+	install -d /etc/gateway/config
 	install -d /var/log
 	install -d /var/lib/gateway
 	install -m 755 $(TARGET_BIN) /usr/local/bin/
 	install -m 644 gateway.ini /etc/gateway/
+	install -m 644 config/*.ini /etc/gateway/config/
 	@echo "Install complete"
 
 # 运行测试

@@ -41,6 +41,47 @@ static int app_device_is_valid_connection_type(int connection_type)
            connection_type == CONNECTION_TYPE_BLE_MESH;
 }
 
+static void app_device_set_state(Device *device, DeviceState state)
+{
+    if (!device) {
+        return;
+    }
+    device->lifecycle_state = state;
+}
+
+DeviceState app_device_get_state(const Device *device)
+{
+    if (!device) {
+        return DEVICE_STATE_UNINITIALIZED;
+    }
+    if (device->lifecycle_state < DEVICE_STATE_UNINITIALIZED ||
+        device->lifecycle_state > DEVICE_STATE_ERROR) {
+        return DEVICE_STATE_ERROR;
+    }
+    return (DeviceState)device->lifecycle_state;
+}
+
+const char *app_device_state_to_string(DeviceState state)
+{
+    switch (state) {
+    case DEVICE_STATE_INITIALIZED:
+        return "initialized";
+    case DEVICE_STATE_CONFIGURING:
+        return "configuring";
+    case DEVICE_STATE_CONFIGURED:
+        return "configured";
+    case DEVICE_STATE_RUNNING:
+        return "running";
+    case DEVICE_STATE_STOPPED:
+        return "stopped";
+    case DEVICE_STATE_ERROR:
+        return "error";
+    case DEVICE_STATE_UNINITIALIZED:
+    default:
+        return "uninitialized";
+    }
+}
+
 /**
  * @brief 关闭设备文件描述符并重置为-1
  */
@@ -306,6 +347,13 @@ int app_device_init(Device *device, char *filename)
         log_warn("Invalid device or filename");
         return -1;
     }
+
+    device->fd = -1;
+    device->is_running = 0;
+    device->vptr = NULL;
+    device->recv_buffer = NULL;
+    device->send_buffer = NULL;
+    app_device_set_state(device, DEVICE_STATE_UNINITIALIZED);
     
     // 分配文件名内存
     size_t filename_len = strlen(filename) + 1;
@@ -353,6 +401,7 @@ int app_device_init(Device *device, char *filename)
     
     // 初始化连接类型
     device->connection_type = CONNECTION_TYPE_NONE;
+    app_device_set_state(device, DEVICE_STATE_INITIALIZED);
     
     // 初始化接收缓冲区
     if (app_buffer_init(device->recv_buffer, g_device_buffer_len) < 0)
@@ -417,11 +466,13 @@ int app_device_start(Device *device)
     }
 
     device->is_running = 1;
+    app_device_set_state(device, DEVICE_STATE_RUNNING);
 
     // 创建后台读取线程
     if (pthread_create(&device->background_thread, NULL, device->vptr->background_task, device) != 0)
     {
         device->is_running = 0;
+        app_device_set_state(device, DEVICE_STATE_ERROR);
         log_error("Failed to create background thread");
         return -1;
     }
@@ -447,12 +498,14 @@ int app_device_write(Device *device, void *ptr, int len)
     // 写入发送缓冲区
     if (app_buffer_write(device->send_buffer, ptr, len) < 0)
     {
+        app_device_set_state(device, DEVICE_STATE_ERROR);
         return -1;
     }
     
     // 注册发送任务到线程池
     if (app_task_register(device->vptr->send_task, device) < 0)
     {
+        app_device_set_state(device, DEVICE_STATE_ERROR);
         return -1;
     }
     return 0;
@@ -488,6 +541,7 @@ void app_device_stop(Device *device)
     if (device->is_running)
     {
         device->is_running = 0;
+        app_device_set_state(device, DEVICE_STATE_STOPPED);
         
         // 关闭文件描述符（会触发read返回）
         app_device_close_fd(device);
@@ -540,4 +594,5 @@ void app_device_close(Device *device)
         free(device->filename);
         device->filename = NULL;
     }
+    app_device_set_state(device, DEVICE_STATE_UNINITIALIZED);
 }

@@ -1,15 +1,12 @@
 /**
  * @file app_transport.h
- * @brief 通信抽象层 - 支持MQTT和DDS切换
- * 
+ * @brief 网络协议层 - 封装 MQTT / DDS 的连接、发布、订阅与回调
+ *
  * 功能：
  * - 统一的发布/订阅接口
- * - 支持MQTT和DDS后端切换
- * - 运行时切换通信方式
- * - 配置文件驱动
- * 
- * @author Gateway Team
- * @version 2.0
+ * - 统一的连接状态与回调转发
+ * - 统一的默认主题管理
+ * - 协议配置与运行时操作分离
  */
 
 #ifndef __APP_TRANSPORT_H__
@@ -80,6 +77,14 @@ typedef struct TransportManager {
  * @return 0成功, -1失败
  */
 int transport_init(TransportManager *manager, const TransportConfig *config);
+
+/**
+ * @brief 从配置文件加载协议配置
+ * @param config 配置输出
+ * @param config_file 配置文件路径
+ * @return 0成功, -1失败
+ */
+int transport_load_config(TransportConfig *config, const char *config_file);
 
 /**
  * @brief 从配置文件初始化

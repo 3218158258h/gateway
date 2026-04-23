@@ -11,8 +11,7 @@
 
 #include "../include/app_runner.h"
 #include "../include/app_task.h"
-#include "../include/app_serial.h"
-#include "../include/app_link_adapter.h"
+#include "../include/app_device_layer.h"
 #include "../include/app_protocol_config.h"
 #include "../include/app_router.h"
 #include "../include/app_persistence.h"
@@ -37,7 +36,6 @@
 
 typedef struct RuntimeConfig {
     int thread_pool_executors;
-    int device_buffer_size;
 } RuntimeConfig;
 
 /* 全局静态变量 */
@@ -117,19 +115,27 @@ static int parse_string_list(char *list, char out_values[][APP_PROTOCOL_NAME_MAX
 static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
                               char out_interfaces[][APP_INTERFACE_NAME_MAX_LEN],
                               char out_protocols[][APP_PROTOCOL_NAME_MAX_LEN],
-                              int *out_count)
+                              int *out_count,
+                              int *out_buffer_size)
 {
-    if (!out_paths || !out_interfaces || !out_protocols || !out_count) {
+    if (!out_paths || !out_interfaces || !out_protocols || !out_count || !out_buffer_size) {
         return -1;
     }
     
     ConfigManager cfg_mgr = {0};
-    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0) {
-        log_error("Failed to load device config file: %s", APP_DEFAULT_CONFIG_FILE);
+    if (config_init(&cfg_mgr, APP_DEVICE_CONFIG_FILE) != 0) {
+        log_error("Failed to load device config file: %s", APP_DEVICE_CONFIG_FILE);
         return -1;
     }
     if (config_load(&cfg_mgr) != 0) {
-        log_error("Failed to load device config file: %s", APP_DEFAULT_CONFIG_FILE);
+        log_error("Failed to load device config file: %s", APP_DEVICE_CONFIG_FILE);
+        config_destroy(&cfg_mgr);
+        return -1;
+    }
+
+    *out_buffer_size = config_get_int(&cfg_mgr, "device", "buffer_size", DEFAULT_DEVICE_BUFFER_SIZE);
+    if (*out_buffer_size <= 0) {
+        log_error("Invalid config [device].buffer_size: %d", *out_buffer_size);
         config_destroy(&cfg_mgr);
         return -1;
     }
@@ -160,15 +166,10 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
 
     if (*out_count == 0) {
         char single_device[MAX_DEVICE_PATH_LEN] = {0};
-        int from_legacy = 0;
         if (!(config_get_string(&cfg_mgr, "device", "single_device",
                                 "", single_device, sizeof(single_device)) == 0 &&
               single_device[0] != '\0')) {
-            if (config_get_string(&cfg_mgr, "bluetooth", "device",
-                                  "", single_device, sizeof(single_device)) == 0 &&
-                single_device[0] != '\0') {
-                from_legacy = 1;
-            }
+            single_device[0] = '\0';
         }
 
         if (single_device[0] != '\0') {
@@ -178,16 +179,13 @@ static int load_device_config(char out_paths[][MAX_DEVICE_PATH_LEN],
                 config_destroy(&cfg_mgr);
                 return -1;
             }
-            if (from_legacy) {
-                log_warn("Using legacy fallback [bluetooth].device; prefer [device].serial_devices or [device].single_device");
-            }
             snprintf(out_paths[0], MAX_DEVICE_PATH_LEN, "%s", trimmed);
             *out_count = 1;
         }
     }
 
     if (*out_count == 0) {
-        log_error("Missing required config: [device].serial_devices or [device].single_device (legacy: [bluetooth].device)");
+        log_error("Missing required config: [device].serial_devices or [device].single_device");
         config_destroy(&cfg_mgr);
         return -1;
     }
@@ -248,23 +246,20 @@ static int load_runtime_config(RuntimeConfig *runtime)
     }
 
     runtime->thread_pool_executors = DEFAULT_TASK_EXECUTORS;
-    runtime->device_buffer_size = DEFAULT_DEVICE_BUFFER_SIZE;
 
     ConfigManager cfg_mgr = {0};
-    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0) {
-        log_error("Failed to load runtime config file: %s", APP_DEFAULT_CONFIG_FILE);
+    if (config_init(&cfg_mgr, APP_RUNTIME_CONFIG_FILE) != 0) {
+        log_error("Failed to load runtime config file: %s", APP_RUNTIME_CONFIG_FILE);
         return -1;
     }
     if (config_load(&cfg_mgr) != 0) {
-        log_error("Failed to load runtime config file: %s", APP_DEFAULT_CONFIG_FILE);
+        log_error("Failed to load runtime config file: %s", APP_RUNTIME_CONFIG_FILE);
         config_destroy(&cfg_mgr);
         return -1;
     }
 
     runtime->thread_pool_executors = config_get_int(
         &cfg_mgr, "runtime", "thread_pool_executors", DEFAULT_TASK_EXECUTORS);
-    runtime->device_buffer_size = config_get_int(
-        &cfg_mgr, "device", "buffer_size", DEFAULT_DEVICE_BUFFER_SIZE);
     config_destroy(&cfg_mgr);
 
     if (runtime->thread_pool_executors <= 0) {
@@ -272,14 +267,8 @@ static int load_runtime_config(RuntimeConfig *runtime)
                   runtime->thread_pool_executors);
         return -1;
     }
-    if (runtime->device_buffer_size <= 0) {
-        log_error("Invalid config [device].buffer_size: %d",
-                  runtime->device_buffer_size);
-        return -1;
-    }
-    log_info("Runtime config loaded: thread_pool_executors=%d, device_buffer_size=%d",
-             runtime->thread_pool_executors,
-             runtime->device_buffer_size);
+    log_info("Runtime config loaded: thread_pool_executors=%d",
+             runtime->thread_pool_executors);
     return 0;
 }
 
@@ -424,7 +413,18 @@ int app_runner_run()
     if (load_runtime_config(&runtime_config) != 0) {
         return -1;
     }
-    app_device_set_buffer_size(runtime_config.device_buffer_size);
+
+    int device_buffer_size = DEFAULT_DEVICE_BUFFER_SIZE;
+    int configured_device_count = 0;
+    char device_paths[MAX_SERIAL_DEVICES][MAX_DEVICE_PATH_LEN];
+    char device_interfaces[MAX_SERIAL_DEVICES][APP_INTERFACE_NAME_MAX_LEN];
+    char device_protocols[MAX_SERIAL_DEVICES][APP_PROTOCOL_NAME_MAX_LEN];
+
+    if (load_device_config(device_paths, device_interfaces, device_protocols,
+                           &configured_device_count, &device_buffer_size) != 0) {
+        return -1;
+    }
+    app_device_set_buffer_size(device_buffer_size);
 
     // 初始化线程池
     if (app_task_init(runtime_config.thread_pool_executors) != 0) {
@@ -433,7 +433,7 @@ int app_runner_run()
 
     // 初始化持久化模块
     PersistenceConfig persist_config;
-    if (load_persistence_config(&persist_config, APP_DEFAULT_CONFIG_FILE) != 0) {
+    if (load_persistence_config(&persist_config, APP_PERSISTENCE_CONFIG_FILE) != 0) {
         app_task_close();
         return -1;
     }
@@ -448,29 +448,17 @@ int app_runner_run()
         }
     }
 
-    // 从配置加载设备列表并初始化串口设备
-    char device_paths[MAX_SERIAL_DEVICES][MAX_DEVICE_PATH_LEN];
-    char device_interfaces[MAX_SERIAL_DEVICES][APP_INTERFACE_NAME_MAX_LEN];
-    char device_protocols[MAX_SERIAL_DEVICES][APP_PROTOCOL_NAME_MAX_LEN];
-    int configured_device_count = 0;
-    if (load_device_config(device_paths, device_interfaces, device_protocols, &configured_device_count) != 0) {
-        if (persistence.is_initialized) {
-            persistence_close(&persistence);
-        }
-        app_task_close();
-        return -1;
-    }
     log_info("Startup summary: configured_device_count=%d, device_buffer_size=%d, persistence_queue_size=%d",
              configured_device_count,
-             app_device_get_buffer_size(),
+             device_buffer_size,
              persist_config.max_queue_size);
 
     int initialized_device_count = 0;
     for (int i = 0; i < configured_device_count; i++) {
-        if (app_link_adapter_init(&devices[i], device_paths[i], device_interfaces[i]) != 0) {
+        if (app_device_layer_init(&devices[i], device_paths[i], device_interfaces[i]) != 0) {
             log_error("Failed to init serial device: %s", device_paths[i]);
             for (int j = 0; j < initialized_device_count; j++) {
-                app_device_close((Device *)&devices[j]);
+                app_device_layer_close((Device *)&devices[j]);
             }
             if (persistence.is_initialized) {
                 persistence_close(&persistence);
@@ -479,12 +467,12 @@ int app_runner_run()
             return -1;
         }
 
-        if (app_link_adapter_apply_protocol(&devices[i], device_protocols[i]) != 0) {
+        if (app_device_layer_configure(&devices[i], device_protocols[i]) != 0) {
             log_error("Failed to apply protocol '%s' on device: %s",
                       device_protocols[i], device_paths[i]);
-            app_device_close((Device *)&devices[i]);
+            app_device_layer_close((Device *)&devices[i]);
             for (int j = 0; j < initialized_device_count; j++) {
-                app_device_close((Device *)&devices[j]);
+                app_device_layer_close((Device *)&devices[j]);
             }
             if (persistence.is_initialized) {
                 persistence_close(&persistence);
@@ -499,7 +487,7 @@ int app_runner_run()
     // 初始化路由管理器
     if (app_router_init(&router, NULL) != 0) {
         for (int i = 0; i < initialized_device_count; i++) {
-            app_device_close((Device *)&devices[i]);
+            app_device_layer_close((Device *)&devices[i]);
         }
         if (persistence.is_initialized) {
             persistence_close(&persistence);
@@ -512,7 +500,7 @@ int app_runner_run()
     for (int i = 0; i < initialized_device_count; i++) {
         if (app_router_register_device(&router, (Device *)&devices[i]) != 0) {
             for (int j = 0; j < initialized_device_count; j++) {
-                app_device_close((Device *)&devices[j]);
+                app_device_layer_close((Device *)&devices[j]);
             }
             app_router_close(&router);
             if (persistence.is_initialized) {

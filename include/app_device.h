@@ -5,6 +5,17 @@
 #include "app_message.h"
 #include <sys/types.h>
 
+typedef enum
+{
+    DEVICE_STATE_UNINITIALIZED = 0,
+    DEVICE_STATE_INITIALIZED,
+    DEVICE_STATE_CONFIGURING,
+    DEVICE_STATE_CONFIGURED,
+    DEVICE_STATE_RUNNING,
+    DEVICE_STATE_STOPPED,
+    DEVICE_STATE_ERROR
+} DeviceState;
+
 struct VTable;
 
 typedef struct DeviceStruct
@@ -17,6 +28,7 @@ typedef struct DeviceStruct
     Buffer *recv_buffer;            // 接收缓冲区
     Buffer *send_buffer;            // 发送缓冲区
     int is_running;                 // 设备是否正在运行
+    DeviceState lifecycle_state;    // 设备生命周期状态
 } Device;
 
 struct VTable
@@ -32,6 +44,9 @@ struct VTable
 int app_device_init(Device *device, char *filename);
 void app_device_set_buffer_size(int size);
 int app_device_get_buffer_size(void);
+
+DeviceState app_device_get_state(const Device *device);
+const char *app_device_state_to_string(DeviceState state);
 
 /**
  * @brief 启动设备后台线程

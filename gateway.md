@@ -213,9 +213,10 @@ main.c
    ▼
 3. app_router_init()
    │
-   ├── config_init() + config_load()
-   │   - 加载 /etc/gateway/gateway.ini
-   │   - 解析配置项到 ConfigManager.items[]
+    ├── config_init() + config_load()
+    │   - 加载 gateway.ini 总配置清单
+    │   - 再按层读取 config/transport.ini、config/transport_physical.ini、
+    │     config/device.ini、config/network.ini、config/protocols.ini 等分层配置
    │
    ├── transport_init()
    │   ├── mqtt_init()

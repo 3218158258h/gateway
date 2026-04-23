@@ -12,6 +12,7 @@
 
 #include "../include/app_router.h"
 #include "../include/app_message.h"
+#include "../include/app_device_layer.h"
 #include "../include/app_config.h"
 #include "../thirdparty/log.c/log.h"
 #include <string.h>
@@ -323,21 +324,35 @@ int app_router_init(RouterManager *router, const char *config_file)
     router->state = ROUTER_STATE_STOPPED;
     router->is_initialized = 0;
     
-    const char *cfg_file = config_file ? config_file : APP_DEFAULT_CONFIG_FILE;
+    const char *gateway_cfg_file = config_file ? config_file : APP_DEFAULT_CONFIG_FILE;
 
     ConfigManager cfg;
     int transport_inited = 0;
     int router_message_size = ROUTER_DEFAULT_MESSAGE_SIZE;
-    if (config_init(&cfg, cfg_file) != 0) {
-        log_error("Failed to load router config file: %s", cfg_file);
+    if (config_init(&cfg, gateway_cfg_file) != 0) {
+        log_error("Failed to load gateway config file: %s", gateway_cfg_file);
         return router_init_fail(router, transport_inited);
     }
 
     if (config_load(&cfg) != 0) {
-        log_error("Failed to load router config file: %s", cfg_file);
+        log_error("Failed to load gateway config file: %s", gateway_cfg_file);
         config_destroy(&cfg);
         return router_init_fail(router, transport_inited);
     }
+
+    char router_cfg_file[CONFIG_MAX_PATH_LEN] = {0};
+    char transport_cfg_file[CONFIG_MAX_PATH_LEN] = {0};
+    config_get_string(&cfg, "config_files", "router", APP_ROUTER_CONFIG_FILE,
+                      router_cfg_file, sizeof(router_cfg_file));
+    config_get_string(&cfg, "config_files", "transport", APP_TRANSPORT_CONFIG_FILE,
+                      transport_cfg_file, sizeof(transport_cfg_file));
+    if (router_cfg_file[0] == '\0') {
+        snprintf(router_cfg_file, sizeof(router_cfg_file), "%s", APP_ROUTER_CONFIG_FILE);
+    }
+    if (transport_cfg_file[0] == '\0') {
+        snprintf(transport_cfg_file, sizeof(transport_cfg_file), "%s", APP_TRANSPORT_CONFIG_FILE);
+    }
+
     router_message_size = config_get_int(&cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
     config_destroy(&cfg);
 
@@ -347,9 +362,15 @@ int app_router_init(RouterManager *router, const char *config_file)
     }
     router->max_message_size = router_message_size;
     
-    /* 从配置文件初始化传输层 */
-    if (transport_init_from_config(&router->transport, cfg_file) != 0) {
-        log_error("Failed to initialize transport from config file: %s", cfg_file);
+    TransportConfig transport_config = {0};
+
+    /* 先加载网络侧协议配置，再初始化传输层 */
+    if (transport_load_config(&transport_config, transport_cfg_file) != 0) {
+        log_error("Failed to load transport config file: %s", transport_cfg_file);
+        return router_init_fail(router, transport_inited);
+    }
+    if (transport_init(&router->transport, &transport_config) != 0) {
+        log_error("Failed to initialize transport from config file: %s", transport_cfg_file);
         return router_init_fail(router, transport_inited);
     }
     transport_inited = 1;
@@ -401,8 +422,7 @@ void app_router_close(RouterManager *router)
     pthread_mutex_lock(&router->lock);
     for (int i = 0; i < router->device_count; i++) {
         if (router->devices[i]) {
-            app_device_stop(router->devices[i]);
-            app_device_close(router->devices[i]);
+            app_device_layer_close(router->devices[i]);
             router->devices[i] = NULL;
         }
     }
@@ -502,7 +522,17 @@ int app_router_start(RouterManager *router)
     pthread_mutex_lock(&router->lock);
     for (int i = 0; i < router->device_count; i++) {
         if (router->devices[i]) {
-            app_device_start(router->devices[i]);
+            if (app_device_layer_start(router->devices[i]) != 0) {
+                for (int j = 0; j <= i; j++) {
+                    if (router->devices[j]) {
+                        app_device_layer_stop(router->devices[j]);
+                    }
+                }
+                router->state = ROUTER_STATE_ERROR;
+                pthread_mutex_unlock(&router->lock);
+                transport_disconnect(&router->transport);
+                return -1;
+            }
         }
     }
     router->state = ROUTER_STATE_RUNNING;
@@ -528,7 +558,7 @@ void app_router_stop(RouterManager *router)
     pthread_mutex_lock(&router->lock);
     for (int i = 0; i < router->device_count; i++) {
         if (router->devices[i]) {
-            app_device_stop(router->devices[i]);
+            app_device_layer_stop(router->devices[i]);
         }
     }
     router->state = ROUTER_STATE_STOPPED;
@@ -576,7 +606,7 @@ int app_router_unregister_device(RouterManager *router, Device *device)
     /* 查找并移除设备 */
     for (int i = 0; i < router->device_count; i++) {
         if (router->devices[i] == device) {
-            app_device_stop(device);
+            app_device_layer_stop(device);
             
             /* 移动后面的元素填补空位 */
             for (int j = i; j < router->device_count - 1; j++) {

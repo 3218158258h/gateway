@@ -27,8 +27,19 @@
 #define CONFIG_MAX_SECTION_LEN 64
 /* 最大配置文件路径长度 */
 #define CONFIG_MAX_PATH_LEN 256
-/* 默认配置文件路径（仅保留一处硬编码） */
-#define APP_DEFAULT_CONFIG_FILE "gateway.ini"
+/* 顶层配置清单 */
+#define APP_GATEWAY_CONFIG_FILE "gateway.ini"
+/* 向后兼容：旧入口仍指向顶层清单 */
+#define APP_DEFAULT_CONFIG_FILE APP_GATEWAY_CONFIG_FILE
+
+/* 分层配置文件路径 */
+#define APP_TRANSPORT_CONFIG_FILE "config/transport.ini"
+#define APP_PHYSICAL_TRANSPORT_CONFIG_FILE "config/transport_physical.ini"
+#define APP_ROUTER_CONFIG_FILE "config/router.ini"
+#define APP_RUNTIME_CONFIG_FILE "config/runtime.ini"
+#define APP_PERSISTENCE_CONFIG_FILE "config/persistence.ini"
+#define APP_DEVICE_CONFIG_FILE "config/device.ini"
+#define APP_NETWORK_CONFIG_FILE "config/network.ini"
 
 /* 配置值类型 */
 typedef enum {

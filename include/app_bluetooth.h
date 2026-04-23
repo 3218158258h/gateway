@@ -3,6 +3,7 @@
 
 #include "app_serial.h"
 #include "app_protocol_config.h"
+#include "app_private_protocol.h"
 
 /* 蓝牙数据包长度字段字节数 */
 #define BT_LENGTH_FIELD_SIZE    1
@@ -24,6 +25,10 @@
  * @return 0 成功；-1 失败
  */
 int app_bluetooth_setConnectionType(SerialDevice *serial_device, const char *protocol_name);
+int app_bluetooth_set_protocol_config(SerialDevice *serial_device, const PrivateProtocolConfig *protocol);
+void app_bluetooth_clear_context(int device_fd);
+
+int app_bluetooth_sendCommand(SerialDevice *serial_device, const char *cmd);
 
 /**
  * @brief 发送 AT 状态检查指令，验证模块是否处于 AT 命令模式
@@ -66,8 +71,8 @@ int app_bluetooth_setMAddr(SerialDevice *serial_device, char *m_addr);
 /**
  * @brief 接收后处理钩子：从原始串口流中拆帧，输出标准内部消息格式
  *
- * 按协议配置（frame_header/frame_tail/id_len）解析帧边界，提取设备ID和有效载荷，
- * 组装为内部消息格式（1字节连接类型 + 1字节ID长度 + 1字节数据长度 + ID + 数据）。
+ * 按协议配置（frame_header/frame_tail/id_len/ack_frame/nack_frame）解析帧边界，
+ * 提取设备ID和有效载荷，组装为内部消息格式（1字节连接类型 + 1字节ID长度 + 1字节数据长度 + ID + 数据）。
  *
  * @param device 设备指针
  * @param ptr    读缓冲区（输入原始字节，输出内部消息格式；原地改写）
@@ -80,7 +85,7 @@ int app_bluetooth_postRead(Device *device, void *ptr, int *len);
  * @brief 发送前处理钩子：将内部消息格式转换为设备私有帧格式
  *
  * 从内部消息格式（1字节类型 + 1字节ID长度 + 1字节数据长度 + ID + 数据）
- * 组装 AT+MESH 指令（mesh_cmd_prefix + ID + 数据 + "\r\n"），原地改写缓冲区。
+ * 组装私有下行指令（mesh_cmd_prefix + ID + 数据 + "\r\n"），原地改写缓冲区。
  *
  * @param device 设备指针
  * @param ptr    发送缓冲区（输入内部消息格式，输出设备指令帧；原地改写）

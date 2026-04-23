@@ -1,13 +1,11 @@
 /**
  * @file app_transport.c
- * @brief 通信抽象层实现 - 统一MQTT与DDS接口
- * 
+ * @brief 网络协议层实现 - 统一 MQTT / DDS 接口
+ *
  * 功能说明：
- * - 统一封装MQTT和DDS通信接口
- * - 支持运行时协议切换
- * - 从配置文件加载通信参数
- * - 自动管理连接状态和重连
- * - 提供统一的发布/订阅接口
+ * - 统一封装 MQTT 和 DDS 通信接口
+ * - 提供连接、发布、订阅、主题与回调管理
+ * - 配置读取与运行时协议操作分离
  */
 
 #include "app_transport.h"
@@ -24,6 +22,25 @@
 static const char *type_strings[] = {
     "mqtt", "dds", "auto"
 };
+
+static void transport_fill_default_config(TransportConfig *config)
+{
+    if (!config) return;
+    memset(config, 0, sizeof(*config));
+    config->type = TRANSPORT_TYPE_MQTT;
+    snprintf(config->mqtt_broker, sizeof(config->mqtt_broker), "%s", "tcp://localhost:1883");
+    snprintf(config->mqtt_client_id, sizeof(config->mqtt_client_id), "%s", "gateway");
+    config->mqtt_keepalive = 60;
+    config->dds_domain_id = 0;
+    snprintf(config->dds_participant_name, sizeof(config->dds_participant_name), "%s", "gateway");
+    snprintf(config->publish_topic, sizeof(config->publish_topic), "%s", "gateway/data");
+    snprintf(config->subscribe_topic, sizeof(config->subscribe_topic), "%s", "gateway/command");
+    snprintf(config->dds_publish_topic, sizeof(config->dds_publish_topic), "%s", "GatewayData");
+    snprintf(config->dds_publish_type, sizeof(config->dds_publish_type), "%s", "GatewayDataType");
+    snprintf(config->dds_subscribe_topic, sizeof(config->dds_subscribe_topic), "%s", "GatewayCommand");
+    snprintf(config->dds_subscribe_type, sizeof(config->dds_subscribe_type), "%s", "GatewayCommandType");
+    config->default_qos = 1;
+}
 
 static int transport_is_valid_type_string(const char *str)
 {
@@ -67,6 +84,111 @@ TransportType transport_string_to_type(const char *str)
         }
     }
     return TRANSPORT_TYPE_MQTT;
+}
+
+int transport_load_config(TransportConfig *config, const char *config_file)
+{
+    if (!config) return -1;
+
+    transport_fill_default_config(config);
+
+    const char *cfg_file = config_file ? config_file : APP_TRANSPORT_CONFIG_FILE;
+    ConfigManager cfg = {0};
+    if (config_init(&cfg, cfg_file) != 0) {
+        log_error("Failed to init config file: %s", cfg_file);
+        return -1;
+    }
+
+    if (config_load(&cfg) != 0) {
+        log_error("Failed to load config file: %s", cfg_file);
+        config_destroy(&cfg);
+        return -1;
+    }
+
+    char type_str[32] = {0};
+    if (config_get_string(&cfg, "transport", "type", NULL, type_str, sizeof(type_str)) != 0 ||
+        type_str[0] == '\0') {
+        log_error("Missing required config: [transport].type");
+        config_destroy(&cfg);
+        return -1;
+    }
+    if (!transport_is_valid_type_string(type_str)) {
+        log_error("Invalid required config: [transport].type=%s (expected: mqtt|dds|auto)", type_str);
+        config_destroy(&cfg);
+        return -1;
+    }
+    config->type = transport_string_to_type(type_str);
+
+    int mqtt_ready = 0;
+    if (config_get_string(&cfg, "mqtt", "server", "",
+                          config->mqtt_broker, sizeof(config->mqtt_broker)) == 0 &&
+        config->mqtt_broker[0] != '\0' &&
+        config_get_string(&cfg, "mqtt", "client_id", "",
+                          config->mqtt_client_id, sizeof(config->mqtt_client_id)) == 0 &&
+        config->mqtt_client_id[0] != '\0' &&
+        config_get_string(&cfg, "mqtt", "publish_topic", "",
+                          config->publish_topic, sizeof(config->publish_topic)) == 0 &&
+        config->publish_topic[0] != '\0' &&
+        config_get_string(&cfg, "mqtt", "subscribe_topic", "",
+                          config->subscribe_topic, sizeof(config->subscribe_topic)) == 0 &&
+        config->subscribe_topic[0] != '\0') {
+        config->mqtt_keepalive = config_get_int(&cfg, "mqtt", "keepalive", config->mqtt_keepalive);
+        mqtt_ready = config->mqtt_keepalive > 0;
+    }
+
+    int dds_ready = 0;
+    config->dds_domain_id = config_get_int(&cfg, "dds", "domain_id", config->dds_domain_id);
+    if (config->dds_domain_id >= 0 &&
+        config_get_string(&cfg, "dds", "participant_name", "",
+                          config->dds_participant_name, sizeof(config->dds_participant_name)) == 0 &&
+        config->dds_participant_name[0] != '\0' &&
+        config_get_string(&cfg, "dds", "publish_topic", "",
+                          config->dds_publish_topic, sizeof(config->dds_publish_topic)) == 0 &&
+        config->dds_publish_topic[0] != '\0' &&
+        config_get_string(&cfg, "dds", "publish_type", "",
+                          config->dds_publish_type, sizeof(config->dds_publish_type)) == 0 &&
+        config->dds_publish_type[0] != '\0' &&
+        config_get_string(&cfg, "dds", "subscribe_topic", "",
+                          config->dds_subscribe_topic, sizeof(config->dds_subscribe_topic)) == 0 &&
+        config->dds_subscribe_topic[0] != '\0' &&
+        config_get_string(&cfg, "dds", "subscribe_type", "",
+                          config->dds_subscribe_type, sizeof(config->dds_subscribe_type)) == 0 &&
+        config->dds_subscribe_type[0] != '\0') {
+        dds_ready = 1;
+    }
+
+    if (config->type == TRANSPORT_TYPE_MQTT && !mqtt_ready) {
+        log_error("Missing required MQTT config for [transport].type=mqtt");
+        config_destroy(&cfg);
+        return -1;
+    }
+    if (config->type == TRANSPORT_TYPE_DDS && !dds_ready) {
+        log_error("Missing required DDS config for [transport].type=dds");
+        config_destroy(&cfg);
+        return -1;
+    }
+    if (config->type == TRANSPORT_TYPE_AUTO) {
+        if (!mqtt_ready && !dds_ready) {
+            log_error("Missing required config: [transport].type=auto requires valid MQTT or DDS config");
+            config_destroy(&cfg);
+            return -1;
+        }
+        if (mqtt_ready && !dds_ready) {
+            config->type = TRANSPORT_TYPE_MQTT;
+        } else if (!mqtt_ready && dds_ready) {
+            config->type = TRANSPORT_TYPE_DDS;
+        }
+    }
+
+    config->default_qos = config_get_int(&cfg, "transport", "default_qos", config->default_qos);
+    if (config->default_qos < 0) {
+        log_error("Invalid required config: [transport].default_qos=%d", config->default_qos);
+        config_destroy(&cfg);
+        return -1;
+    }
+
+    config_destroy(&cfg);
+    return 0;
 }
 
 /**
@@ -157,23 +279,7 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
     if (config) {
         memcpy(&manager->config, config, sizeof(TransportConfig));
     } else {
-        // 使用默认配置
-        manager->config.type = TRANSPORT_TYPE_MQTT;
-        snprintf(manager->config.mqtt_broker, sizeof(manager->config.mqtt_broker), "%s", "tcp://localhost:1883");
-        snprintf(manager->config.mqtt_client_id, sizeof(manager->config.mqtt_client_id), "%s", "gateway");
-        manager->config.mqtt_keepalive = 60;
-        manager->config.dds_domain_id = 0;
-        manager->config.default_qos = 1;
-        
-        // 默认话题配置 - MQTT
-        snprintf(manager->config.publish_topic, sizeof(manager->config.publish_topic), "%s", "gateway/data");
-        snprintf(manager->config.subscribe_topic, sizeof(manager->config.subscribe_topic), "%s", "gateway/command");
-        
-        // 默认话题配置 - DDS
-        snprintf(manager->config.dds_publish_topic, sizeof(manager->config.dds_publish_topic), "%s", "GatewayData");
-        snprintf(manager->config.dds_publish_type, sizeof(manager->config.dds_publish_type), "%s", "GatewayDataType");
-        snprintf(manager->config.dds_subscribe_topic, sizeof(manager->config.dds_subscribe_topic), "%s", "GatewayCommand");
-        snprintf(manager->config.dds_subscribe_type, sizeof(manager->config.dds_subscribe_type), "%s", "GatewayCommandType");
+        transport_fill_default_config(&manager->config);
     }
     
     manager->state = TRANSPORT_STATE_DISCONNECTED;
@@ -265,110 +371,10 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
  */
 int transport_init_from_config(TransportManager *manager, const char *config_file)
 {
-    if (!manager) return -1;
-    
-    ConfigManager config;
-    if (config_init(&config, config_file) != 0) {
-        log_error("Failed to init config file: %s", config_file ? config_file : "(null)");
+    TransportConfig tconfig;
+    if (transport_load_config(&tconfig, config_file) != 0) {
         return -1;
     }
-    
-    if (config_load(&config) != 0) {
-        log_error("Failed to load config file: %s", config_file ? config_file : "(null)");
-        config_destroy(&config);
-        return -1;
-    }
-    
-    TransportConfig tconfig = {0};
-    
-    // 读取传输类型
-    char type_str[32] = {0};
-    if (config_get_string(&config, "transport", "type", NULL, type_str, sizeof(type_str)) != 0 ||
-        type_str[0] == '\0') {
-        log_error("Missing required config: [transport].type");
-        config_destroy(&config);
-        return -1;
-    }
-    if (!transport_is_valid_type_string(type_str)) {
-        log_error("Invalid required config: [transport].type=%s (expected: mqtt|dds|auto)", type_str);
-        config_destroy(&config);
-        return -1;
-    }
-    tconfig.type = transport_string_to_type(type_str);
-
-    int mqtt_ready = 0;
-    if (config_get_string(&config, "mqtt", "server", "",
-                          tconfig.mqtt_broker, sizeof(tconfig.mqtt_broker)) == 0 &&
-        tconfig.mqtt_broker[0] != '\0' &&
-        config_get_string(&config, "mqtt", "client_id", "",
-                          tconfig.mqtt_client_id, sizeof(tconfig.mqtt_client_id)) == 0 &&
-        tconfig.mqtt_client_id[0] != '\0' &&
-        config_get_string(&config, "mqtt", "publish_topic", "",
-                          tconfig.publish_topic, sizeof(tconfig.publish_topic)) == 0 &&
-        tconfig.publish_topic[0] != '\0' &&
-        config_get_string(&config, "mqtt", "subscribe_topic", "",
-                          tconfig.subscribe_topic, sizeof(tconfig.subscribe_topic)) == 0 &&
-        tconfig.subscribe_topic[0] != '\0') {
-        tconfig.mqtt_keepalive = config_get_int(&config, "mqtt", "keepalive", -1);
-        if (tconfig.mqtt_keepalive > 0) {
-            mqtt_ready = 1;
-        }
-    }
-
-    int dds_ready = 0;
-    tconfig.dds_domain_id = config_get_int(&config, "dds", "domain_id", -1);
-    if (tconfig.dds_domain_id >= 0 &&
-        config_get_string(&config, "dds", "participant_name", "",
-                          tconfig.dds_participant_name, sizeof(tconfig.dds_participant_name)) == 0 &&
-        tconfig.dds_participant_name[0] != '\0' &&
-        config_get_string(&config, "dds", "publish_topic", "",
-                          tconfig.dds_publish_topic, sizeof(tconfig.dds_publish_topic)) == 0 &&
-        tconfig.dds_publish_topic[0] != '\0' &&
-        config_get_string(&config, "dds", "publish_type", "",
-                          tconfig.dds_publish_type, sizeof(tconfig.dds_publish_type)) == 0 &&
-        tconfig.dds_publish_type[0] != '\0' &&
-        config_get_string(&config, "dds", "subscribe_topic", "",
-                          tconfig.dds_subscribe_topic, sizeof(tconfig.dds_subscribe_topic)) == 0 &&
-        tconfig.dds_subscribe_topic[0] != '\0' &&
-        config_get_string(&config, "dds", "subscribe_type", "",
-                          tconfig.dds_subscribe_type, sizeof(tconfig.dds_subscribe_type)) == 0 &&
-        tconfig.dds_subscribe_type[0] != '\0') {
-        dds_ready = 1;
-    }
-
-    if (tconfig.type == TRANSPORT_TYPE_MQTT && !mqtt_ready) {
-        log_error("Missing required MQTT config for [transport].type=mqtt");
-        config_destroy(&config);
-        return -1;
-    }
-    if (tconfig.type == TRANSPORT_TYPE_DDS && !dds_ready) {
-        log_error("Missing required DDS config for [transport].type=dds");
-        config_destroy(&config);
-        return -1;
-    }
-    if (tconfig.type == TRANSPORT_TYPE_AUTO) {
-        if (!mqtt_ready && !dds_ready) {
-            log_error("Missing required config: [transport].type=auto requires valid MQTT or DDS config");
-            config_destroy(&config);
-            return -1;
-        }
-        if (mqtt_ready && !dds_ready) {
-            tconfig.type = TRANSPORT_TYPE_MQTT;
-        } else if (!mqtt_ready && dds_ready) {
-            tconfig.type = TRANSPORT_TYPE_DDS;
-        }
-    }
-
-    // 服务质量配置
-    tconfig.default_qos = config_get_int(&config, "transport", "default_qos", -1);
-    if (tconfig.default_qos < 0) {
-        log_error("Invalid required config: [transport].default_qos=%d", tconfig.default_qos);
-        config_destroy(&config);
-        return -1;
-    }
-    
-    config_destroy(&config);
-    
     return transport_init(manager, &tconfig);
 }
 

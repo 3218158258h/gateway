@@ -15,7 +15,6 @@
 #include "../include/app_config.h"
 #include "../thirdparty/log.c/log.h"
 
-#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -48,129 +47,6 @@ static int app_protocol_parse_connection_type(const char *value, ConnectionType 
         return 0;
     }
     return -1;
-}
-
-/**
- * @brief 将十六进制字符串解析为字节数组
- *
- * 支持忽略中间空白字符，不区分大小写。
- * 用于解析 frame_header / frame_tail 配置项。
- *
- * @param hex       输入十六进制字符串（如 "F1DD"）
- * @param out       输出字节数组
- * @param max_len   输出数组最大长度
- * @param out_len   实际输出字节数
- * @return 0 成功；-1 失败（格式非法或超长）
- */
-static int app_protocol_parse_hex_bytes(const char *hex, unsigned char *out, int max_len, int *out_len)
-{
-    if (!hex || !out || !out_len || max_len <= 0) {
-        return -1;
-    }
-
-    /* 去除空白并转大写 */
-    char normalized[CONFIG_MAX_VALUE_LEN] = {0};
-    int normalized_len = 0;
-    for (int i = 0; hex[i] != '\0' && normalized_len < (int)sizeof(normalized) - 1; i++) {
-        if (!isspace((unsigned char)hex[i])) {
-            normalized[normalized_len++] = (char)toupper((unsigned char)hex[i]);
-        }
-    }
-    if (normalized_len == 0 || (normalized_len % 2) != 0) {
-        return -1;
-    }
-
-    int bytes_len = normalized_len / 2;
-    if (bytes_len > max_len) {
-        return -1;
-    }
-    for (int i = 0; i < bytes_len; i++) {
-        char byte_str[3] = {normalized[i * 2], normalized[i * 2 + 1], '\0'};
-        unsigned int byte_value = 0;
-        if (sscanf(byte_str, "%2x", &byte_value) != 1) {
-            return -1;
-        }
-        out[i] = (unsigned char)byte_value;
-    }
-    *out_len = bytes_len;
-    return 0;
-}
-
-/**
- * @brief 将指令字符串中的 \r \n 字面量（2字节）转义为实际 CR/LF 控制字符
- *
- * 配置文件中写 AT\r\n，加载后存储为实际 0x0D 0x0A，
- * 这样指令可直接传给 write()。
- *
- * @param s 待处理的字符串（原地修改）
- */
-static void app_protocol_unescape_cmd(char *s)
-{
-    if (!s) {
-        return;
-    }
-    char *src = s;
-    char *dst = s;
-    while (*src != '\0') {
-        if (src[0] == '\\' && src[1] == 'r') {
-            *dst++ = '\r';
-            src += 2;
-        } else if (src[0] == '\\' && src[1] == 'n') {
-            *dst++ = '\n';
-            src += 2;
-        } else {
-            *dst++ = *src++;
-        }
-    }
-    *dst = '\0';
-}
-
-/**
- * @brief 解析分号分隔的指令序列字符串，存入输出数组
- *
- * 每条指令末尾的 \r\n 字面量会被自动转义为实际字节。
- * 空指令（仅空白）会被跳过。
- *
- * @param cmds_str    分号分隔的指令序列字符串（来自配置文件）
- * @param out         输出指令数组
- * @param max_count   输出数组最大条数
- * @return 解析出的有效指令条数
- */
-static int app_protocol_parse_init_cmds(const char *cmds_str,
-                                        char out[][APP_PROTOCOL_INIT_CMD_MAX_LEN],
-                                        int max_count)
-{
-    if (!cmds_str || !out || max_count <= 0) {
-        return 0;
-    }
-
-    /* 复制一份以便 strtok_r 修改 */
-    char buf[CONFIG_MAX_VALUE_LEN];
-    snprintf(buf, sizeof(buf), "%s", cmds_str);
-
-    int count = 0;
-    char *saveptr = NULL;
-    char *token = strtok_r(buf, ";", &saveptr);
-    while (token && count < max_count) {
-        /* 去除首尾空白 */
-        while (*token == ' ' || *token == '\t') {
-            token++;
-        }
-        size_t tlen = strlen(token);
-        while (tlen > 0 && (token[tlen - 1] == ' ' || token[tlen - 1] == '\t')) {
-            token[--tlen] = '\0';
-        }
-        if (tlen == 0) {
-            token = strtok_r(NULL, ";", &saveptr);
-            continue;
-        }
-        snprintf(out[count], APP_PROTOCOL_INIT_CMD_MAX_LEN, "%s", token);
-        /* 将 \r \n 字面量转义为实际字节 */
-        app_protocol_unescape_cmd(out[count]);
-        count++;
-        token = strtok_r(NULL, ";", &saveptr);
-    }
-    return count;
 }
 
 /**
@@ -261,8 +137,8 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
     if (config_get_string(&cfg_mgr, section, "frame_header", "", value, sizeof(value)) == 0 &&
         value[0] != '\0') {
         int frame_header_len = 0;
-        if (app_protocol_parse_hex_bytes(value, config->frame_header, APP_PROTOCOL_MAX_FRAME_BYTES,
-                                         &frame_header_len) == 0) {
+        if (app_private_protocol_parse_hex_bytes(value, config->frame_header, APP_PROTOCOL_MAX_FRAME_BYTES,
+                                          &frame_header_len) == 0) {
             config->frame_header_len = frame_header_len;
         } else {
             log_warn("Invalid %s.frame_header=%s, fallback default", section, value);
@@ -273,8 +149,8 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
     if (config_get_string(&cfg_mgr, section, "frame_tail", "", value, sizeof(value)) == 0 &&
         value[0] != '\0') {
         int frame_tail_len = 0;
-        if (app_protocol_parse_hex_bytes(value, config->frame_tail, APP_PROTOCOL_MAX_FRAME_BYTES,
-                                         &frame_tail_len) == 0) {
+        if (app_private_protocol_parse_hex_bytes(value, config->frame_tail, APP_PROTOCOL_MAX_FRAME_BYTES,
+                                          &frame_tail_len) == 0) {
             config->frame_tail_len = frame_tail_len;
         } else {
             log_warn("Invalid %s.frame_tail=%s, ignore", section, value);
@@ -300,13 +176,38 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
     if (config_get_string(&cfg_mgr, section, "status_cmd", "", value, sizeof(value)) == 0 &&
         value[0] != '\0') {
         snprintf(config->status_cmd, sizeof(config->status_cmd), "%s", value);
-        app_protocol_unescape_cmd(config->status_cmd);
+        app_private_protocol_unescape_cmd(config->status_cmd);
+    }
+
+    /* 解析 ACK 帧（十六进制字节串，留空表示使用默认值） */
+    if (config_get_string(&cfg_mgr, section, "ack_frame", "", value, sizeof(value)) == 0 &&
+        value[0] != '\0') {
+        int ack_len = 0;
+        if (app_private_protocol_parse_hex_bytes(value, config->ack_frame, APP_PROTOCOL_MAX_FRAME_BYTES,
+                                                 &ack_len) == 0) {
+            config->ack_frame_len = ack_len;
+        } else {
+            log_warn("Invalid %s.ack_frame=%s, fallback default", section, value);
+        }
+    }
+
+    /* 解析 NACK 帧（十六进制字节串，留空表示不启用） */
+    if (config_get_string(&cfg_mgr, section, "nack_frame", "", value, sizeof(value)) == 0 &&
+        value[0] != '\0') {
+        int nack_len = 0;
+        if (app_private_protocol_parse_hex_bytes(value, config->nack_frame, APP_PROTOCOL_MAX_FRAME_BYTES,
+                                                 &nack_len) == 0) {
+            config->nack_frame_len = nack_len;
+        } else {
+            log_warn("Invalid %s.nack_frame=%s, ignore", section, value);
+            config->nack_frame_len = 0;
+        }
     }
 
     /* 解析设备配置指令序列（分号分隔，\r\n 自动转义） */
     if (config_get_string(&cfg_mgr, section, "init_cmds", "", value, sizeof(value)) == 0 &&
         value[0] != '\0') {
-        int count = app_protocol_parse_init_cmds(value, config->init_cmds, APP_PROTOCOL_MAX_INIT_CMDS);
+        int count = app_private_protocol_parse_init_cmds(value, config->init_cmds, APP_PROTOCOL_MAX_INIT_CMDS);
         if (count > 0) {
             config->init_cmds_count = count;
         }
