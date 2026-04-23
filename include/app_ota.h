@@ -1,14 +1,14 @@
 /**
  * @file app_ota.h
- * @brief A/B分区OTA升级系统
- * 
+ * @brief A/B 分区 OTA 升级系统
+ *
  * 功能：
- * - A/B双分区升级
+ * - A/B 双分区升级
  * - 数字签名验证
  * - 安全启动链
  * - 自动回滚
  * - 升级状态管理
- * 
+ *
  * @author Gateway Team
  * @version 2.0
  */
@@ -19,7 +19,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* OTA状态 */
+/* OTA 状态。 */
 typedef enum {
     OTA_STATE_IDLE = 0,         /* 空闲 */
     OTA_STATE_CHECKING,         /* 检查更新中 */
@@ -32,7 +32,7 @@ typedef enum {
     OTA_STATE_ROLLBACK          /* 回滚中 */
 } OtaState;
 
-/* OTA错误码 */
+/* OTA 错误码。 */
 typedef enum {
     OTA_OK = 0,
     OTA_ERR_NETWORK = -1,
@@ -45,18 +45,18 @@ typedef enum {
     OTA_ERR_INVALID = -8
 } OtaError;
 
-/* 分区信息 */
+/* 分区信息。 */
 typedef struct OtaPartition {
-    char name[32];// 分区名称
-    char device[64];// 设备名称
-    uint64_t size;// 分区大小(字节)
-    uint64_t used;// 已用空间(字节)
-    int is_active;// 是否为活动分区
-    int is_valid;// 是否有效
-    int boot_count;// 启动次数
+    char name[32];        /* 分区名称。 */
+    char device[64];      /* 设备名称。 */
+    uint64_t size;        /* 分区大小（字节）。 */
+    uint64_t used;        /* 已用空间（字节）。 */
+    int is_active;        /* 是否为活动分区。 */
+    int is_valid;         /* 是否有效。 */
+    int boot_count;       /* 启动次数。 */
 } OtaPartition;
 
-/* OTA配置 */
+/* OTA 配置。 */
 typedef struct OtaConfig {
     char version_url[256];      /* 版本信息URL */
     char firmware_url[256];     /* 固件下载URL */
@@ -69,21 +69,21 @@ typedef struct OtaConfig {
     int auto_rollback;          /* 是否自动回滚 */
 } OtaConfig;
 
-/* OTA管理器 */
+/* OTA 管理器。 */
 typedef struct OtaManager {
-    OtaConfig config;                // OTA配置
-    OtaState state;                  // OTA状态
-    OtaPartition partition_a;        // A分区信息
-    OtaPartition partition_b;        // B分区信息
-    OtaPartition *active_partition;  // 当前活动分区指针
-    OtaPartition *inactive_partition;// 当前非活动分区指针
-    
-    char current_version[32];        // 当前版本号
-    char new_version[32];            // 新版本号
-    int download_progress;           // 下载进度(0-100)
-    int is_initialized;              // 是否初始化
-    
-    /* 回调 */
+    OtaConfig config;                /* OTA 配置。 */
+    OtaState state;                  /* OTA 状态。 */
+    OtaPartition partition_a;        /* A 分区信息。 */
+    OtaPartition partition_b;        /* B 分区信息。 */
+    OtaPartition *active_partition;  /* 当前活动分区指针。 */
+    OtaPartition *inactive_partition; /* 当前非活动分区指针。 */
+
+    char current_version[32];        /* 当前版本号。 */
+    char new_version[32];            /* 新版本号。 */
+    int download_progress;           /* 下载进度（0-100）。 */
+    int is_initialized;              /* 是否已初始化。 */
+
+    /* 回调。 */
     void (*on_state_changed)(struct OtaManager *manager, OtaState state);
     void (*on_progress)(struct OtaManager *manager, int progress);
     void (*on_error)(struct OtaManager *manager, OtaError error);

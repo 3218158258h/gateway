@@ -7,6 +7,7 @@
 
 typedef enum
 {
+    /* 物理接口类型：同一套设备层可以挂到不同底层接口上。 */
     APP_INTERFACE_SERIAL = 0,
     APP_INTERFACE_UART = 0,
     APP_INTERFACE_SPI,
@@ -16,6 +17,7 @@ typedef enum
 
 typedef enum
 {
+    /* 波特率枚举值直接映射到协议配置中的编码字符。 */
     SERIAL_BAUD_RATE_9600 = '4',
     SERIAL_BAUD_RATE_115200 = '8',
 } SerialBaudRate;
@@ -35,43 +37,43 @@ typedef enum
 
 typedef struct PhysicalTransportConfigStruct
 {
-    AppInterfaceType interface_type;  // 物理接口类型
-    char device_path[256];            // 设备路径
+    AppInterfaceType interface_type;  /* 物理接口类型。 */
+    char device_path[256];            /* 设备路径。 */
     struct
     {
-        SerialBaudRate baud_rate;     // 波特率
-        StopBits stop_bits;           // 停止位
-        Parity parity;                // 校验位
-        int block_mode;               // 1=阻塞, 0=非阻塞
+        SerialBaudRate baud_rate;     /* 波特率。 */
+        StopBits stop_bits;           /* 停止位。 */
+        Parity parity;                /* 校验位。 */
+        int block_mode;               /* 1=阻塞，0=非阻塞。 */
     } uart;
     struct
     {
-        unsigned int bitrate;         // CAN 比特率
-        int loopback;                 // 回环模式
-        int listen_only;              // 仅监听
-        int fd_mode;                  // CAN FD 模式
+        unsigned int bitrate;         /* CAN 比特率。 */
+        int loopback;                 /* 回环模式。 */
+        int listen_only;              /* 仅监听。 */
+        int fd_mode;                  /* CAN FD 模式。 */
     } can;
     struct
     {
-        unsigned int clock_hz;        // SPI 时钟频率
-        unsigned int mode;            // SPI 模式
-        unsigned int bits_per_word;   // 每字数据位数
-        int lsb_first;                // 位序
-        unsigned int chip_select;     // 片选号
+        unsigned int clock_hz;        /* SPI 时钟频率。 */
+        unsigned int mode;            /* SPI 模式。 */
+        unsigned int bits_per_word;   /* 每字数据位数。 */
+        int lsb_first;                /* 位序。 */
+        unsigned int chip_select;     /* 片选号。 */
     } spi;
     struct
     {
-        unsigned int bus_speed_hz;    // I2C 总线速率
-        unsigned short address;       // 从设备地址
-        int ten_bit_address;          // 10 位地址模式
-        int clock_stretching;         // 时钟拉伸
+        unsigned int bus_speed_hz;    /* I2C 总线速率。 */
+        unsigned short address;       /* 从设备地址。 */
+        int ten_bit_address;          /* 10 位地址模式。 */
+        int clock_stretching;         /* 时钟拉伸。 */
     } i2c;
 } PhysicalTransportConfig;
 
 typedef struct SerialDeviceStruct
 {
-    Device super;                 // 父类
-    PhysicalTransportConfig transport;    // 物理传输配置
+    Device super;                      /* 设备父类。 */
+    PhysicalTransportConfig transport;  /* 物理传输配置。 */
 } SerialDevice;
 
 /**

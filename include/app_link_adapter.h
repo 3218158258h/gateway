@@ -4,7 +4,7 @@
 #include "app_serial.h"
 #include "app_device_layer.h"
 
-/* 接口类型名称最大长度 */
+/* 接口类型名称最大长度。 */
 #define APP_INTERFACE_NAME_MAX_LEN 16
 
 /**

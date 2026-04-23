@@ -1,13 +1,13 @@
 /**
  * @file app_mqtt_v2.h
- * @brief MQTT客户端改进版 - 支持断线重连、消息持久化
- * 
+ * @brief MQTT 客户端抽象层，支持断线重连和消息回调
+ *
  * 改进内容：
- * - 断线自动重连(指数退避策略)
+ * - 断线自动重连（指数退避策略）
  * - 消息发送队列
  * - 连接状态管理
  * - 回调机制
- * 
+ *
  * @author Gateway Team
  * @version 2.0
  */
@@ -18,7 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* MQTT连接状态 */
+/* MQTT 连接状态。 */
 typedef enum {
     MQTT_STATE_DISCONNECTED = 0,   /* 已断开 */
     MQTT_STATE_CONNECTING,          /* 连接中 */
@@ -27,14 +27,14 @@ typedef enum {
     MQTT_STATE_FAILED               /* 连接失败 */
 } MqttState;
 
-/* MQTT QoS级别 */
+/* MQTT QoS 级别。 */
 typedef enum {
     MQTT_QOS_0 = 0,
     MQTT_QOS_1 = 1,
     MQTT_QOS_2 = 2
 } MqttQos;
 
-/* MQTT配置 */
+/* MQTT 配置。 */
 typedef struct MqttConfig {
     char broker_url[256];           /* MQTT服务器地址: tcp://主机:端口 */
     char client_id[128];            /* 客户端ID */
@@ -51,7 +51,7 @@ typedef struct MqttConfig {
     int reconnect_max_attempts;     /* 最大重连次数(0=无限) */
 } MqttConfig;
 
-/* MQTT消息 */
+/* MQTT 消息。 */
 typedef struct MqttMessage {
     char topic[256];
     uint8_t *payload;
@@ -62,7 +62,7 @@ typedef struct MqttMessage {
     int64_t timestamp;              /* 时间戳 */
 } MqttMessage;
 
-/* MQTT客户端 */
+/* MQTT 客户端。 */
 typedef struct MqttClient {
     MqttConfig config;
     MqttState state;

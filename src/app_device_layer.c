@@ -34,6 +34,7 @@ static int app_device_layer_load_runtime_config(DeviceLayerRuntimeConfig *runtim
         return -1;
     }
 
+    /* 先加载默认值，确保配置缺失时仍有可运行的兜底参数。 */
     snprintf(runtime->m_addr, sizeof(runtime->m_addr), "%s", DEVICE_LAYER_DEFAULT_MADDR);
     snprintf(runtime->net_id, sizeof(runtime->net_id), "%s", DEVICE_LAYER_DEFAULT_NETID);
     runtime->work_baud = (DEVICE_LAYER_DEFAULT_WORK_BAUD == 9600)
@@ -50,6 +51,7 @@ static int app_device_layer_load_runtime_config(DeviceLayerRuntimeConfig *runtim
     }
 
     char value[CONFIG_MAX_VALUE_LEN] = {0};
+    /* 运行参数来自 network.ini 的 bluetooth 节，避免写死在设备逻辑里。 */
     if (config_get_string(&cfg_mgr, "bluetooth", "m_addr", DEVICE_LAYER_DEFAULT_MADDR,
                           value, sizeof(value)) == 0 && strlen(value) == DEVICE_LAYER_ADDR_LEN) {
         snprintf(runtime->m_addr, sizeof(runtime->m_addr), "%s", value);
@@ -81,6 +83,7 @@ static int app_device_layer_apply_protocol(SerialDevice *serial_device, const ch
         return -1;
     }
 
+    /* 设备层只编排流程，不直接拼协议字节。 */
     app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURING);
 
     DeviceLayerRuntimeConfig runtime = {0};
@@ -92,6 +95,7 @@ static int app_device_layer_apply_protocol(SerialDevice *serial_device, const ch
         return -1;
     }
 
+    /* 协议层和传输层在这里完成绑定。 */
     app_bluetooth_clear_context(serial_device->super.fd);
     if (app_bluetooth_set_protocol_config(serial_device, &protocol) != 0) {
         app_device_layer_set_state(&serial_device->super, DEVICE_STATE_ERROR);

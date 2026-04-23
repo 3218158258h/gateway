@@ -1,13 +1,13 @@
 /**
  * @file app_dds.h
- * @brief DDS数据分发服务抽象层
- * 
+ * @brief DDS 数据分发服务抽象层
+ *
  * 功能：
  * - 统一的发布/订阅接口
- * - 支持与MQTT切换
- * - QoS策略配置
+ * - 支持与 MQTT 切换
+ * - QoS 策略配置
  * - 自动发现节点
- * 
+ *
  * @author Gateway Team
  * @version 2.0
  */
@@ -18,7 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* DDS QoS策略 */
+/* DDS QoS 策略。 */
 typedef struct DdsQosPolicy {
     int reliability;            /* 0=best_effort, 1=reliable */
     int durability;             /* 0=volatile, 1=transient_local, 2=persistent */
@@ -27,7 +27,7 @@ typedef struct DdsQosPolicy {
     int lifespan_ms;            /* 生命周期(毫秒) */
 } DdsQosPolicy;
 
-/* DDS配置 */
+/* DDS 配置。 */
 typedef struct DdsConfig {
     int domain_id;              /* 域ID */
     char participant_name[64];  /* 参与者名称 */
@@ -40,14 +40,14 @@ typedef struct DdsConfig {
     char default_subscribe_type[64];    /* 默认订阅类型 */
 } DdsConfig;
 
-/* DDS主题 */
+/* DDS 主题。 */
 typedef struct DdsTopic {
     char name[128];
     char type_name[64];
     DdsQosPolicy qos;
 } DdsTopic;
 
-/* DDS消息 */
+/* DDS 消息。 */
 typedef struct DdsMessage {
     char topic[128];
     void *data;
@@ -56,7 +56,7 @@ typedef struct DdsMessage {
     uint64_t sequence_id;
 } DdsMessage;
 
-/* DDS连接状态 */
+/* DDS 连接状态。 */
 typedef enum {
     DDS_STATE_DISABLED = 0,
     DDS_STATE_INITIALIZING,
@@ -64,11 +64,11 @@ typedef enum {
     DDS_STATE_ERROR
 } DdsState;
 
-/* DDS管理器 */
+/* DDS 管理器。 */
 typedef struct DdsManager {
     DdsConfig config;
     DdsState state;
-    void *participant;          /* 域参与者对象 */
+    void *participant;          /* 域参与者对象。 */
     void *publisher;
     void *subscriber;
     int is_initialized;

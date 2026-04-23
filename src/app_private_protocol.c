@@ -26,6 +26,7 @@ void app_private_protocol_load_defaults(PrivateProtocolConfig *config)
         return;
     }
 
+    /* 默认值要能直接覆盖最常见的 BLE Mesh 场景。 */
     memset(config, 0, sizeof(*config));
     config->connection_type = CONNECTION_TYPE_BLE_MESH;
     config->frame_header[0] = 0xF1;
@@ -52,6 +53,7 @@ int app_private_protocol_parse_hex_bytes(const char *hex, unsigned char *out, in
         return -1;
     }
 
+    /* 先去掉空白并统一成大写，再按两位一组解析。 */
     char normalized[CONFIG_MAX_VALUE_LEN] = {0};
     int normalized_len = 0;
     for (int i = 0; hex[i] != '\0' && normalized_len < (int)sizeof(normalized) - 1; i++) {
@@ -88,6 +90,7 @@ void app_private_protocol_unescape_cmd(char *s)
         return;
     }
 
+    /* 配置里写的是可读字符串，落地时要恢复成实际控制字符。 */
     char *src = s;
     char *dst = s;
     while (*src != '\0') {
@@ -112,6 +115,7 @@ int app_private_protocol_parse_init_cmds(const char *cmds_str,
         return 0;
     }
 
+    /* 初始化命令允许用分号串联，保持配置简洁。 */
     char buf[CONFIG_MAX_VALUE_LEN];
     snprintf(buf, sizeof(buf), "%s", cmds_str);
 

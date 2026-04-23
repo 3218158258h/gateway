@@ -5,9 +5,9 @@
 #include "app_protocol_config.h"
 #include "app_private_protocol.h"
 
-/* 蓝牙数据包长度字段字节数 */
+/* 蓝牙数据包长度字段字节数。 */
 #define BT_LENGTH_FIELD_SIZE    1
-/* 蓝牙数据包最小有效数据长度 */
+/* 蓝牙数据包最小有效数据长度。 */
 #define BT_MIN_DATA_LEN         0
 
 /**
