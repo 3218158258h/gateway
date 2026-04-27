@@ -108,7 +108,15 @@ cd <project-root>
 ./scripts/create_virtual_i2c_nodes.sh 2 /tmp/gateway-i2c-vdev
 ./scripts/create_virtual_spi_nodes.sh 2 /tmp/gateway-spi-vdev
 ```
-说明：I2C/SPI 脚本创建的是“字节流模拟节点”（PTY 对），用于应用层联调，不等价于内核真实 `i2c-dev/spidev` 设备。
+说明：
+- 两个脚本默认 `auto` 模式：优先复用真实 `/dev/i2c-*`、`/dev/spidev*`，在目标目录创建 `i2c-gwN`/`spi-gwN` 软链。
+- 若真实设备不足，会自动降级为 PTY 对（`i2c-gwN <-> i2c-simN`、`spi-gwN <-> spi-simN`），仅用于字节流联调。
+- 可通过第 4 个参数强制模式：`real` 或 `pseudo`。
+示例：
+```bash
+./scripts/create_virtual_i2c_nodes.sh 2 /tmp/gateway-i2c-vdev /tmp/gateway-vnodes-i2c-map.tsv real
+./scripts/create_virtual_spi_nodes.sh 2 /tmp/gateway-spi-vdev /tmp/gateway-vnodes-spi-map.tsv pseudo
+```
 
 可选：创建 CAN 虚拟接口（基于 Linux `vcan`）
 ```bash
@@ -282,8 +290,8 @@ gateway/
 
 - `scripts/create_virtual_nodes.sh`：创建虚拟串口节点（`gw/sim` 对）。
 - `scripts/create_virtual_uart_nodes.sh`：创建虚拟 UART 节点（`uart-gw/uart-sim`，并兼容 `gw/sim` 软链）。
-- `scripts/create_virtual_i2c_nodes.sh`：创建虚拟 I2C 风格节点（PTY 模拟）。
-- `scripts/create_virtual_spi_nodes.sh`：创建虚拟 SPI 风格节点（PTY 模拟）。
+- `scripts/create_virtual_i2c_nodes.sh`：创建 I2C 节点（优先 real `/dev/i2c-*`，不足时回退 PTY）。
+- `scripts/create_virtual_spi_nodes.sh`：创建 SPI 节点（优先 real `/dev/spidev*`，不足时回退 PTY）。
 - `scripts/create_virtual_can_nodes.sh`：创建虚拟 CAN 接口（Linux vcan）。
 - `scripts/simulate_lower_device.py`：模拟下位机上报与 AT 响应。
 - `scripts/monitor_virtual_uart_port.sh`：监听虚拟 UART 端口。

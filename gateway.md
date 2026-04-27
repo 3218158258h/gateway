@@ -174,13 +174,16 @@
   - 节点命名：`uart-gwN / uart-simN`
   - 兼容软链：`gwN / simN`
 - I2C 虚拟节点：`scripts/create_virtual_i2c_nodes.sh`
-  - 节点命名：`i2c-gwN / i2c-simN`
+  - 默认模式：`auto`（优先 real `/dev/i2c-*`，不足时回退 pseudo PTY）
+  - 节点命名：real 模式为 `i2c-gwN -> /dev/i2c-*` 软链；pseudo 模式为 `i2c-gwN / i2c-simN`
 - SPI 虚拟节点：`scripts/create_virtual_spi_nodes.sh`
-  - 节点命名：`spi-gwN / spi-simN`
+  - 默认模式：`auto`（优先 real `/dev/spidev*`，不足时回退 pseudo PTY）
+  - 节点命名：real 模式为 `spi-gwN -> /dev/spidev*` 软链；pseudo 模式为 `spi-gwN / spi-simN`
 - CAN 虚拟接口：`scripts/create_virtual_can_nodes.sh`
   - 接口命名：`<prefix><index>`（默认 `vcan0/vcan1/...`）
 
 说明：
-- I2C/SPI 脚本生成的是“字节流模拟节点（PTY）”，用于网关应用层联调。
-- 若要验证真实内核 `i2c-dev/spidev` ioctl 行为，需使用目标板内核驱动和真实总线设备。
+- I2C/SPI 脚本第 4 个参数可显式指定模式：`auto|real|pseudo`。
+- `real` 模式要求系统已有 `/dev/i2c-*` 或 `/dev/spidev*`；脚本只做映射，不创建设备驱动。
+- `pseudo` 模式生成 PTY 字节流节点，仅用于应用层联调，不支持真实 `i2c-dev/spidev` ioctl。
 - CAN 脚本使用 Linux `vcan`，更接近真实 CAN socket 使用方式（需内核支持 vcan）。

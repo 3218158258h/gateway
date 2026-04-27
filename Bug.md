@@ -508,3 +508,45 @@ app_device_layer_send_command(...)
 
 ---
 
+
+## 21. I2C/SPI 旧脚本仅生成 PTY，导致 ioctl 联调误判
+
+### 问题说明
+原 `create_virtual_i2c_nodes.sh` / `create_virtual_spi_nodes.sh` 只生成 PTY 对（`gw/sim`），
+但脚本名会让使用者误以为可直接验证真实内核 `i2c-dev/spidev` 行为。
+在网关初始化时会出现 `Inappropriate ioctl for device`（ENOTTY）告警，造成“接口实现异常”的错觉。
+
+### 问题代码形态（修复前）
+脚本固定走：
+```bash
+socat pty,link=i2c-gwN ... pty,link=i2c-simN ...
+socat pty,link=spi-gwN ... pty,link=spi-simN ...
+```
+没有真实设备优先策略，也没有模式选择开关。
+
+### 修复思路
+- 继续沿用旧脚本名，避免迁移成本。
+- 增加 `auto|real|pseudo` 模式（第 4 参数，默认 `auto`）：
+  - `auto`：优先使用真实 `/dev/i2c-*`、`/dev/spidev*`；不足时回退 PTY。
+  - `real`：强制真实设备，不足直接失败。
+  - `pseudo`：强制 PTY，明确仅用于字节流联调。
+- real 模式下在原目录创建 `i2c-gwN`/`spi-gwN` 软链，兼容现有 `gateway.ini` 路径写法。
+
+### 实际改动
+- `scripts/create_virtual_i2c_nodes.sh`
+  - 新增模式参数与 `I2C_NODE_MODE` 环境变量。
+  - 新增 real 设备发现与软链映射逻辑。
+  - 保留 pseudo PTY 逻辑并在输出中强调 ioctl 限制。
+- `scripts/create_virtual_spi_nodes.sh`
+  - 新增模式参数与 `SPI_NODE_MODE` 环境变量。
+  - 新增 real 设备发现与软链映射逻辑。
+  - 保留 pseudo PTY 逻辑并在输出中强调 ioctl 限制。
+- 文档同步：
+  - `README.md`
+  - `gateway.md`
+
+### 我的看法
+脚本应优先降低“误用概率”而不是只追求“能跑”。
+这次在保留旧入口的前提下，把“真实联调”和“伪节点联调”显式分离，能显著减少日志误判和排障成本。
+
+---
