@@ -100,6 +100,10 @@ static int app_device_layer_apply_protocol_non_serial(SerialDevice *serial_devic
     }
 
     serial_device->super.connection_type = protocol->connection_type;
+    snprintf(serial_device->transport.protocol_name,
+             sizeof(serial_device->transport.protocol_name),
+             "%s",
+             (protocol_name && protocol_name[0]) ? protocol_name : "");
 
     if (serial_device->transport.interface_type == APP_INTERFACE_CAN) {
         /* CAN 设备在链路层已绑定 can_post_read/can_pre_write，不覆盖钩子。 */
@@ -113,19 +117,12 @@ static int app_device_layer_apply_protocol_non_serial(SerialDevice *serial_devic
                  protocol->ack_frame_len);
         return 0;
     }
-
-    app_bluetooth_clear_context(serial_device->super.fd);
-    if (app_bluetooth_set_protocol_config(serial_device, protocol) != 0) {
-        log_error("[protocol] event=bind_failed device=%s protocol=%s interface=%s",
-                  serial_device->super.filename ? serial_device->super.filename : "",
-                  protocol_name ? protocol_name : "",
-                  app_transport_interface_to_string(serial_device->transport.interface_type));
-        app_device_layer_set_state(&serial_device->super, DEVICE_STATE_ERROR);
-        return -1;
+    if (serial_device->transport.interface_type == APP_INTERFACE_SPI ||
+        serial_device->transport.interface_type == APP_INTERFACE_I2C) {
+        /* SPI/I2C 走接口专用事务模型，不绑定蓝牙串口帧钩子。 */
+        serial_device->super.vptr->post_read = NULL;
+        serial_device->super.vptr->pre_write = NULL;
     }
-
-    serial_device->super.vptr->post_read = app_bluetooth_postRead;
-    serial_device->super.vptr->pre_write = app_bluetooth_preWrite;
     app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURED);
     log_info("[protocol] event=apply_success device=%s protocol=%s interface=%s connection_type=%d init_cmds=%d ack_len=%d",
              serial_device->super.filename ? serial_device->super.filename : "",
@@ -164,6 +161,10 @@ static int app_device_layer_apply_protocol_serial(SerialDevice *serial_device,
     }
 
     serial_device->super.connection_type = protocol->connection_type;
+    snprintf(serial_device->transport.protocol_name,
+             sizeof(serial_device->transport.protocol_name),
+             "%s",
+             (protocol_name && protocol_name[0]) ? protocol_name : "");
     serial_device->super.vptr->post_read = app_bluetooth_postRead;
     serial_device->super.vptr->pre_write = app_bluetooth_preWrite;
 

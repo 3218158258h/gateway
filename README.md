@@ -91,36 +91,31 @@ cd <project-root>
 ### 4.1 创建虚拟设备节点
 ```bash
 cd <project-root>
-./scripts/create_virtual_uart_nodes.sh 3 /tmp/gateway-vdev
+./scripts/debug_uart_pseudo.sh 3 /tmp/gateway-vdev
 ```
 
 按设备类型创建（轮询分配）：
 ```bash
-./scripts/create_virtual_uart_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-uart-map.tsv --types ble_mesh,lora
+./scripts/debug_uart_pseudo.sh 6 /tmp/gateway-vdev /tmp/gateway-debug-uart-map.tsv --types ble_mesh,lora
 ```
 
 脚本会输出 `uart-gw` 端口列表，把它写进 `gateway.ini` 的 `[device].serial_devices`。
 同时会生成兼容软链 `gwN/simN`，兼容旧配置与旧工具。
 映射文件列：`index type_name type_code gw_port sim_port socat_pid`。
 
-可选：创建 I2C/SPI 风格的虚拟节点（用于接口路径联调）
+可选：创建 I2C/SPI 无设备调试环境
 ```bash
-./scripts/create_virtual_i2c_nodes.sh 2 /tmp/gateway-i2c-vdev
-./scripts/create_virtual_spi_nodes.sh 2 /tmp/gateway-spi-vdev
+sudo ./scripts/debug_i2c_stub.sh 10 0x50 /tmp/gateway-debug-i2c-map.tsv
+sudo ./scripts/debug_spi_mock.sh spi-mockup /dev/spidev0.0 /tmp/gateway-debug-spi-map.tsv
 ```
 说明：
-- 两个脚本默认 `auto` 模式：优先复用真实 `/dev/i2c-*`、`/dev/spidev*`，在目标目录创建 `i2c-gwN`/`spi-gwN` 软链。
-- 若真实设备不足，会自动降级为 PTY 对（`i2c-gwN <-> i2c-simN`、`spi-gwN <-> spi-simN`），仅用于字节流联调。
-- 可通过第 4 个参数强制模式：`real` 或 `pseudo`。
-示例：
-```bash
-./scripts/create_virtual_i2c_nodes.sh 2 /tmp/gateway-i2c-vdev /tmp/gateway-vnodes-i2c-map.tsv real
-./scripts/create_virtual_spi_nodes.sh 2 /tmp/gateway-spi-vdev /tmp/gateway-vnodes-spi-map.tsv pseudo
-```
+- I2C 使用内核 `i2c-stub`，可模拟寄存器从设备事务。
+- SPI 使用内核 mock/stub 模块，需按目标内核实际模块名传入（示例为 `spi-mockup`）。
+- 两者都用于“真实 ioctl 语义”联调，不再使用 PTY 伪节点冒充总线设备。
 
 可选：创建 CAN 虚拟接口（基于 Linux `vcan`）
 ```bash
-./scripts/create_virtual_can_nodes.sh 2 vcan /tmp/gateway-vnodes-can-map.tsv
+./scripts/debug_can_vcan.sh 2 vcan /tmp/gateway-debug-can-map.tsv
 ```
 说明：CAN 脚本创建并拉起 `vcan` 设备（如 `vcan0/vcan1`），可配合 `cansend/candump` 做链路联调。
 
@@ -143,7 +138,7 @@ python3 <project-root>/scripts/simulate_lower_device.py \
 
 ### 4.3 监控串口数据
 ```bash
-./scripts/monitor_virtual_uart_port.sh /tmp/gateway-vdev/uart-gw0
+./scripts/debug_uart_monitor.sh /tmp/gateway-vdev/uart-gw0
 ```
 
 ### 4.4 DDS 下行命令发布（按设备类型）
@@ -288,13 +283,13 @@ gateway/
 
 ### 7.4 脚本与测试
 
-- `scripts/create_virtual_nodes.sh`：创建虚拟串口节点（`gw/sim` 对）。
-- `scripts/create_virtual_uart_nodes.sh`：创建虚拟 UART 节点（`uart-gw/uart-sim`，并兼容 `gw/sim` 软链）。
-- `scripts/create_virtual_i2c_nodes.sh`：创建 I2C 节点（优先 real `/dev/i2c-*`，不足时回退 PTY）。
-- `scripts/create_virtual_spi_nodes.sh`：创建 SPI 节点（优先 real `/dev/spidev*`，不足时回退 PTY）。
-- `scripts/create_virtual_can_nodes.sh`：创建虚拟 CAN 接口（Linux vcan）。
+- `scripts/debug_uart_pseudo.sh`：创建 UART PTY 调试节点（`uart-gw/uart-sim`，并兼容 `gw/sim` 软链）。
+- `scripts/debug_i2c_stub.sh`：创建 I2C stub 调试总线与从机地址。
+- `scripts/debug_spi_mock.sh`：加载 SPI mock/stub 驱动并映射调试节点。
+- `scripts/debug_can_vcan.sh`：创建 CAN `vcan` 调试接口。
+- `scripts/debug_iface_cleanup.sh`：清理调试资源（UART/Can/I2C stub）。
 - `scripts/simulate_lower_device.py`：模拟下位机上报与 AT 响应。
-- `scripts/monitor_virtual_uart_port.sh`：监听虚拟 UART 端口。
+- `scripts/debug_uart_monitor.sh`：监听虚拟 UART 端口。
 - `scripts/read_gateway_db.py`：读取 SQLite 消息库。
 - `test/publisher.c`：测试命令发布。
 - `test/sub_cmd.c`：测试命令订阅。

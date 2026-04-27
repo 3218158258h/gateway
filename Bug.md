@@ -2,6 +2,74 @@
 
 ---
 
+## 27. 持久化表字段与上云信封不一致，无法按设备维度追踪离线消息
+
+### 问题说明
+上云链路已切换为统一 Envelope（包含 `device_path/interface/protocol_*`），
+但 SQLite 持久化表仍保留旧字段 `topic`，导致离线消息重发与排障时无法直接定位来源设备与协议上下文。
+此外，现网可能已有旧版 `messages` 表，直接改建表会造成历史数据不可读。
+
+### 问题代码
+- `include/app_persistence.h`
+  - `PersistMessage` 结构仍为：
+    - `id/topic/payload/payload_len/qos/...`
+- `src/app_persistence.c`
+  - 建表 SQL 仍是：
+    - `topic TEXT NOT NULL`
+  - `persistence_save()` 入参仍是：
+    - `const char *topic`
+  - 查询 SQL（`persistence_get_next` / `persistence_get_all_pending`）仍按 `topic` 读取。
+- `src/app_runner.c`
+  - 持久化调用仍写死：
+    - `persistence_save(&persistence, "GatewayData", ...)`
+- `scripts/read_gateway_db.py`
+  - 查询输出仍固定打印 `topic`。
+
+### 修复思路
+- 持久化层改为“消息主键 + 设备/接口/协议元数据 + payload”的结构。
+- 保留自增 `id` 作为稳定主键，不改为 `device_path`：
+  - `id` 负责唯一性与重试状态索引；
+  - `device_path` 负责来源标识与业务排障。
+- 启动时执行一次 schema 检查：
+  - 若检测到旧表（含 `topic` 或缺少新字段），自动迁移到新表并保留原记录 `id/payload/qos/status/...`。
+- 脚本侧兼容新旧表，优先按新字段展示。
+
+### 实际改动
+- `include/app_persistence.h`
+  - `PersistMessage` 新增并替换字段：
+    - `device_path`
+    - `interface_name`
+    - `protocol_family`
+    - `protocol_name`
+  - `persistence_save()` 签名改为传入上述四个元数据字段。
+- `src/app_persistence.c`
+  - 建表 SQL 改为新字段结构，移除 `topic`。
+  - 新增 `idx_device_path` 索引。
+  - 新增迁移逻辑：
+    - `table_has_column()`
+    - `migrate_messages_table()`
+  - `persistence_save()` 改为写入设备与协议信息。
+  - `persistence_get_next()` 与 `persistence_get_all_pending()` 改为读取新字段。
+- `src/app_runner.c`
+  - 持久化回调中从 `Device/SerialDevice` 采集：
+    - `device_path`
+    - `interface_name`
+    - `protocol_name`
+    - `protocol_family`（按接口映射：`serial_private/i2c_reg/spi_cmd/can_raw`）
+  - 调整 `persistence_save()` 调用参数，移除固定 `"GatewayData"`。
+- `scripts/read_gateway_db.py`
+  - 新增 `PRAGMA table_info(messages)` 检测。
+  - 新表输出：
+    - `device_path/interface_name/protocol_family/protocol_name`
+  - 旧表保留回退查询，避免历史库脚本直接报错。
+
+### 验证结果
+- 持久化消息与上云 Envelope 在设备维度字段上对齐。
+- 消息队列可按 `device_path` 快速追踪来源。
+- 旧版数据库在启动时可自动迁移到新结构，避免人工清库。
+
+---
+
 ## 1. 启动配置快照缺失（可观测性不足）
 
 ### 问题说明
@@ -548,5 +616,197 @@ socat pty,link=spi-gwN ... pty,link=spi-simN ...
 ### 我的看法
 脚本应优先降低“误用概率”而不是只追求“能跑”。
 这次在保留旧入口的前提下，把“真实联调”和“伪节点联调”显式分离，能显著减少日志误判和排障成本。
+
+---
+
+## 22. I2C/SPI 复用流式读线程导致持续告警与接口语义偏差
+
+### 问题说明
+原设备层后台线程统一按串口流式模型循环 `read()`。
+对于真实 I2C/SPI 设备，这种模型不符合主机事务语义，会在无事务数据时持续触发读错误日志。
+
+### 问题代码
+- `src/app_device.c`
+  - `app_device_backgroundTask()` 统一对所有接口执行阻塞/轮询 `read()`。
+- `src/app_device_layer.c`
+  - 非串口接口曾绑定蓝牙串口帧钩子，导致接口语义耦合。
+
+### 修复思路
+- 为 I2C/SPI 引入接口专用后台任务，替换统一流式读模型。
+- I2C/SPI 后台任务按配置执行周期事务（关闭轮询时仅保活等待，不刷读错误）。
+- 非串口协议应用中，SPI/I2C 不再绑定蓝牙串口帧钩子。
+
+### 实际改动
+- 新增文件：
+  - `include/app_iface_i2c.h`
+  - `include/app_iface_spi.h`
+  - `src/app_iface_i2c.c`
+  - `src/app_iface_spi.c`
+- `src/app_link_adapter.c`
+  - I2C/SPI 初始化后绑定各自 `background_task`。
+  - I2C 地址配置日志补全十六进制地址与错误文本。
+- `src/app_device_layer.c`
+  - `APP_INTERFACE_I2C/APP_INTERFACE_SPI` 不再绑定蓝牙帧钩子。
+- `src/app_device.c`
+  - 读错误日志增加 `errno` 上下文并做限频。
+  - 设备打开失败日志补全 `errno` 文本。
+
+### 验证结果
+- 启动阶段 I2C/SPI 不再走统一流式读逻辑。
+- 具备独立接口后台任务，可按配置开启事务轮询。
+
+---
+
+## 23. 物理层配置缺少事务轮询字段与地址解析歧义
+
+### 问题说明
+原配置仅有接口基础参数，缺少 I2C/SPI 事务轮询字段。
+同时 I2C 地址仅按整数读取，`0x70` 等写法容易产生歧义。
+
+### 问题代码
+- `include/app_serial.h` 的 `spi/i2c` 结构缺少轮询参数。
+- `src/app_serial.c` 中 `address` 通过整型读取，无法显式支持十六进制文本。
+
+### 修复思路
+- 扩展 `PhysicalTransportConfig`，增加 I2C/SPI 轮询参数。
+- I2C 地址改为字符串解析（`strtoul(..., base=0)`），兼容 `112` 与 `0x70`。
+- 在 `transport_physical.ini` 提供新字段模板。
+
+### 实际改动
+- `include/app_serial.h`
+  - SPI 增加 `poll_interval_ms/transfer_len`。
+  - I2C 增加 `poll_interval_ms/register_addr/register_addr_width/read_len`。
+- `src/app_serial.c`
+  - 加载上述新字段。
+  - `address` 支持十进制与十六进制配置。
+- `config/transport_physical.ini`
+  - `transport.spi_default/spi0` 增加轮询字段。
+  - `transport.i2c_default/i2c0` 增加轮询字段。
+
+### 验证结果
+- 轮询字段可从配置文件加载到运行时结构。
+- I2C 地址支持 `0x..` 写法，减少配置歧义。
+
+---
+
+## 24. 调试脚本入口冗余且语义混乱，导致误用成本高
+
+### 问题说明
+旧脚本以 `create_virtual_*` 为主，历史兼容入口较多，难以区分 pseudo 与真实总线调试能力。
+
+### 问题代码
+- `scripts/` 下存在多套入口，语义重叠：
+  - `create_virtual_nodes.sh`
+  - `create_virtual_uart_nodes.sh`
+  - `create_virtual_i2c_nodes.sh`
+  - `create_virtual_spi_nodes.sh`
+  - `create_virtual_can_nodes.sh`
+  - `monitor_virtual_port.sh`
+  - `monitor_virtual_uart_port.sh`
+
+### 修复思路
+- 统一改为 `debug_*` 命名，按接口能力显式区分。
+- 删除歧义旧入口，避免同功能多命令并存。
+- 新增统一清理脚本。
+
+### 实际改动
+- 新增：
+  - `scripts/debug_uart_pseudo.sh`
+  - `scripts/debug_uart_monitor.sh`
+  - `scripts/debug_i2c_stub.sh`
+  - `scripts/debug_spi_mock.sh`
+  - `scripts/debug_can_vcan.sh`
+  - `scripts/debug_iface_cleanup.sh`
+- 删除：
+  - `scripts/create_virtual_nodes.sh`
+  - `scripts/create_virtual_uart_nodes.sh`
+  - `scripts/create_virtual_i2c_nodes.sh`
+  - `scripts/create_virtual_spi_nodes.sh`
+  - `scripts/create_virtual_can_nodes.sh`
+  - `scripts/monitor_virtual_port.sh`
+  - `scripts/monitor_virtual_uart_port.sh`
+
+### 验证结果
+- 调试脚本入口改为单一命名体系，接口能力边界更清晰。
+
+---
+
+## 25. 上云消息缺少统一信封，单话题下无法稳定区分多接口设备数据
+
+### 问题说明
+项目采用单一上行话题（MQTT: `gateway/data`，DDS: `GatewayData`）发送设备数据。
+原上行消息仅包含 `connection_type/id/data`，缺少接口来源与设备路径信息，
+在 UART/I2C/SPI/CAN 混合接入时无法稳定区分来源设备与协议上下文。
+
+### 问题代码
+- `src/app_router.c`
+  - `on_device_message()` 通过 `binary_to_json_safe()` 直接把二进制消息转旧 JSON：
+    - `connection_type`
+    - `id`
+    - `data`
+  - 缺少 `interface/device_path/protocol_*` 等区分字段。
+
+### 修复思路
+- 在路由层上行路径引入统一 Envelope 封包。
+- 继续使用单话题上云，不拆分多 topic。
+- Envelope 固定包含：
+  - `schema_version`
+  - `interface`
+  - `device_path`
+  - `protocol_family`
+  - `protocol_name`
+  - `timestamp_ms`
+  - `payload_len`
+  - `payload`（内含 `connection_type/id/data`）
+- 设备标识统一使用 `device_path`，不引入逻辑 ID。
+
+### 实际改动
+- `src/app_router.c`
+  - 删除旧上行转换路径 `binary_to_json_safe()` 的调用。
+  - 新增 `binary_to_envelope_json()` 作为上行统一封包函数。
+  - 新增 `router_protocol_family()`、`router_now_ms()`、`router_bin_to_hex()`。
+  - `on_device_message()` 改为发布 Envelope JSON。
+- `include/app_serial.h`
+  - `PhysicalTransportConfig` 新增 `protocol_name` 字段。
+- `src/app_device_layer.c`
+  - 在协议应用阶段写入 `transport.protocol_name`，供上云封包使用。
+
+### 验证结果
+- 上云消息在单话题下可按 `interface + device_path + protocol_family + protocol_name` 区分来源。
+- `payload` 保留原业务核心字段（`connection_type/id/data`），便于云端解包处理。
+
+---
+
+## 26. 缺少 MQTT/DDS 统一封包解包工具，联调无法直接验证字段完整性
+
+### 问题说明
+统一 Envelope 上线后，原测试程序仍按旧 JSON 字段输出，
+无法直接验证 `interface/device_path/protocol_*` 等新增字段。
+
+### 问题代码
+- `test/sub_data.c` 原逻辑主要打印旧格式字段（`connection_type/id/data`）。
+- `test` 目录缺少 MQTT 侧的 Envelope 解包程序。
+
+### 修复思路
+- DDS 订阅程序改为按 Envelope 字段解包并打印。
+- 新增 MQTT 订阅解包程序，统一输出关键字段。
+
+### 实际改动
+- `test/sub_data.c`
+  - 增加 Envelope 字段打印：
+    - `interface`
+    - `device_path`
+    - `protocol_family`
+    - `protocol_name`
+    - `payload.connection_type`
+    - `payload.id`
+    - `payload.data`
+- 新增 `test/mqtt_envelope_sub.py`
+  - 订阅 MQTT 上行话题并按 Envelope 结构解包打印。
+- `test/README.md`
+  - 更新为 Envelope 测试说明，并新增 MQTT 解包工具使用方法。
+
+### 验证结果
+- DDS 与 MQTT 均可在测试侧直观确认 Envelope 字段与 payload 内容。
 
 ---

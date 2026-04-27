@@ -1,5 +1,7 @@
 #include "../include/app_link_adapter.h"
 #include "../include/app_config.h"
+#include "../include/app_iface_i2c.h"
+#include "../include/app_iface_spi.h"
 #include "../thirdparty/log.c/log.h"
 
 #include <string.h>
@@ -250,6 +252,7 @@ static int init_spi_device(SerialDevice *device, const char *device_path)
     if (ioctl(device->super.fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
         log_warn("SPI set clock_hz failed for %s: %s", device_path, strerror(errno));
     }
+    device->super.vptr->background_task = app_iface_spi_background_task;
     return 0;
 }
 
@@ -263,8 +266,19 @@ static int init_i2c_device(SerialDevice *device, const char *device_path)
         log_warn("I2C set ten_bit_address failed for %s: %s", device_path, strerror(errno));
     }
     if (ioctl(device->super.fd, I2C_SLAVE, device->transport.i2c.address) < 0) {
-        log_warn("I2C set slave address failed for %s: %s", device_path, strerror(errno));
+        int saved_errno = errno;
+        if (saved_errno == EBUSY &&
+            ioctl(device->super.fd, I2C_SLAVE_FORCE, device->transport.i2c.address) == 0) {
+            log_warn("I2C address was busy, force-selected address for %s addr=0x%X",
+                     device_path, (unsigned int)device->transport.i2c.address);
+        } else {
+            log_warn("I2C set slave address failed for %s addr=0x%X: %s",
+                     device_path,
+                     (unsigned int)device->transport.i2c.address,
+                     strerror(saved_errno));
+        }
     }
+    device->super.vptr->background_task = app_iface_i2c_background_task;
     return 0;
 }
 

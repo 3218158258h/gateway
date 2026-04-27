@@ -39,6 +39,7 @@ typedef struct PhysicalTransportConfigStruct
 {
     AppInterfaceType interface_type;  /* 物理接口类型。 */
     char device_path[256];            /* 设备路径。 */
+    char protocol_name[64];           /* 协议名称（来自 gateway.ini 设备协议配置）。 */
     struct
     {
         SerialBaudRate baud_rate;     /* 波特率。 */
@@ -60,6 +61,8 @@ typedef struct PhysicalTransportConfigStruct
         unsigned int bits_per_word;   /* 每字数据位数。 */
         int lsb_first;                /* 位序。 */
         unsigned int chip_select;     /* 片选号。 */
+        int poll_interval_ms;         /* 轮询周期（毫秒，<=0 表示关闭主动轮询）。 */
+        unsigned int transfer_len;    /* 单次轮询事务长度（字节）。 */
     } spi;
     struct
     {
@@ -67,6 +70,10 @@ typedef struct PhysicalTransportConfigStruct
         unsigned short address;       /* 从设备地址。 */
         int ten_bit_address;          /* 10 位地址模式。 */
         int clock_stretching;         /* 时钟拉伸。 */
+        int poll_interval_ms;         /* 轮询周期（毫秒，<=0 表示关闭主动轮询）。 */
+        unsigned short register_addr; /* 轮询寄存器地址。 */
+        int register_addr_width;      /* 寄存器地址宽度（1/2 字节）。 */
+        unsigned int read_len;        /* 单次轮询读取长度。 */
     } i2c;
 } PhysicalTransportConfig;
 

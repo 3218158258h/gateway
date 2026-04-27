@@ -16,6 +16,7 @@
 #include "../include/app_protocol_config.h"
 #include "../include/app_router.h"
 #include "../include/app_persistence.h"
+#include "../include/app_serial.h"
 #include "../include/app_config.h"
 #include "../thirdparty/log.c/log.h"
 
@@ -341,8 +342,11 @@ static int load_persistence_config(const ConfigManager *gateway_cfg, Persistence
 static void on_device_message_persist(RouterManager *router, Device *device,
                                        const void *data, size_t len)
 {
-    (void)device;
     int qos = 1;
+    const char *device_path = "";
+    const char *interface_name = "unknown";
+    const char *protocol_family = "unknown";
+    const char *protocol_name = "unknown";
 
     if (router) {
         qos = router->transport.config.default_qos;
@@ -351,9 +355,34 @@ static void on_device_message_persist(RouterManager *router, Device *device,
         }
     }
 
+    if (device) {
+        const SerialDevice *serial_device = (const SerialDevice *)device;
+        device_path = device->filename ? device->filename : "";
+        interface_name = app_transport_interface_to_string(serial_device->transport.interface_type);
+        protocol_name = serial_device->transport.protocol_name[0] ?
+                        serial_device->transport.protocol_name : "unknown";
+
+        switch (serial_device->transport.interface_type) {
+        case APP_INTERFACE_I2C:
+            protocol_family = "i2c_reg";
+            break;
+        case APP_INTERFACE_SPI:
+            protocol_family = "spi_cmd";
+            break;
+        case APP_INTERFACE_CAN:
+            protocol_family = "can_raw";
+            break;
+        case APP_INTERFACE_SERIAL:
+        default:
+            protocol_family = "serial_private";
+            break;
+        }
+    }
+
     /* 保存消息到数据库，QoS 与传输层默认配置保持一致。 */
     uint64_t msg_id;
-    if (persistence_save(&persistence, "GatewayData", data, len, qos, &msg_id) == 0) {
+    if (persistence_save(&persistence, device_path, interface_name,
+                         protocol_family, protocol_name, data, len, qos, &msg_id) == 0) {
         log_trace("Message persisted: id=%llu", (unsigned long long)msg_id);
     }
 }

@@ -3,17 +3,17 @@ set -euo pipefail
 
 COUNT="1"
 BASE_DIR="/tmp/gateway-vdev"
-MAP_FILE="/tmp/gateway-vnodes-uart-map.tsv"
+MAP_FILE="/tmp/gateway-debug-uart-map.tsv"
 TYPE_SPEC="ble_mesh"
 
 print_usage() {
   cat <<'USAGE'
 Usage:
-  ./scripts/create_virtual_uart_nodes.sh [COUNT] [BASE_DIR] [MAP_FILE] [--types TYPE1,TYPE2,...]
+  ./scripts/debug_uart_pseudo.sh [COUNT] [BASE_DIR] [MAP_FILE] [--types TYPE1,TYPE2,...]
 
 Examples:
-  ./scripts/create_virtual_uart_nodes.sh 3 /tmp/gateway-vdev
-  ./scripts/create_virtual_uart_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-uart-map.tsv --types ble_mesh,lora
+  ./scripts/debug_uart_pseudo.sh 3 /tmp/gateway-vdev
+  ./scripts/debug_uart_pseudo.sh 6 /tmp/gateway-vdev /tmp/gateway-debug-uart-map.tsv --types ble_mesh,lora
 
 Type aliases:
   none|0, lora|1, ble_mesh|ble|2
@@ -28,9 +28,7 @@ normalize_type() {
     0|none) echo "none:0" ;;
     1|lora) echo "lora:1" ;;
     2|ble|ble_mesh|ble-mesh) echo "ble_mesh:2" ;;
-    *)
-      return 1
-      ;;
+    *) return 1 ;;
   esac
 }
 
@@ -107,7 +105,7 @@ fi
 mkdir -p "$BASE_DIR"
 : > "$MAP_FILE"
 
-echo "[INFO] Creating $COUNT virtual UART pair(s) under $BASE_DIR"
+echo "[INFO] Creating $COUNT pseudo UART pair(s) under $BASE_DIR"
 echo "[INFO] type sequence (round-robin): ${TYPE_NAMES[*]}"
 for ((i=0; i<COUNT; i++)); do
   type_idx=$(( i % ${#TYPE_NAMES[@]} ))
@@ -117,7 +115,7 @@ for ((i=0; i<COUNT; i++)); do
   sim_port="$BASE_DIR/uart-sim${i}"
   legacy_gw="$BASE_DIR/gw${i}"
   legacy_sim="$BASE_DIR/sim${i}"
-  log_file="/tmp/gateway-vnodes-uart-socat-${i}.log"
+  log_file="/tmp/gateway-debug-uart-socat-${i}.log"
 
   rm -f "$gw_port" "$sim_port" "$legacy_gw" "$legacy_sim"
 
@@ -127,12 +125,10 @@ for ((i=0; i<COUNT; i++)); do
     >"$log_file" 2>&1 &
 
   pid="$!"
-
   for _ in {1..30}; do
     [[ -e "$gw_port" && -e "$sim_port" ]] && break
     sleep 0.1
   done
-
   if [[ ! -e "$gw_port" || ! -e "$sim_port" ]]; then
     echo "[ERROR] Failed to create pair index=$i (pid=$pid). See $log_file" >&2
     exit 1
@@ -140,16 +136,14 @@ for ((i=0; i<COUNT; i++)); do
 
   ln -s "uart-gw${i}" "$legacy_gw"
   ln -s "uart-sim${i}" "$legacy_sim"
-
-  printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$i" "$type_name" "$type_code" "$gw_port" "$sim_port" "$pid" >> "$MAP_FILE"
-  echo "[OK] uart-pair[$i] type=${type_name}(${type_code}) gw=$gw_port <-> sim=$sim_port pid=$pid (legacy: $legacy_gw/$legacy_sim)"
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$i" "uart" "pseudo" "$type_name" "$type_code" "$gw_port" "$sim_port" >> "$MAP_FILE"
+  echo "[OK] uart-pair[$i] type=${type_name}(${type_code}) gw=$gw_port <-> sim=$sim_port"
 done
 
-serial_devices="$(awk -F'\t' '{print $4}' "$MAP_FILE" | paste -sd, -)"
-
+serial_devices="$(awk -F'\t' '{print $6}' "$MAP_FILE" | paste -sd, -)"
 echo
 echo "[NEXT] gateway.ini [device].serial_devices ="
 echo "       $serial_devices"
 echo "[INFO] map file: $MAP_FILE"
-echo "[INFO] each pair's socat log: /tmp/gateway-vnodes-uart-socat-<idx>.log"
-echo "[INFO] map columns: index, type_name, type_code, gw_port, sim_port, socat_pid"
+echo "[INFO] map columns: index, iface, mode, type_name, type_code, gw_port, sim_port"

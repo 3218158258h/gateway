@@ -133,6 +133,7 @@ static void *app_device_backgroundTask(void *argv)
 {
     unsigned char buf[RECV_TASK_BUF_SIZE];
     Device *device = argv;
+    int read_error_count = 0;
     
     while (device->is_running)
     {
@@ -140,10 +141,18 @@ static void *app_device_backgroundTask(void *argv)
         int buf_len = read(device->fd, buf, 1024);
         if (buf_len < 0)
         {
-            log_warn("read device data error");
+            read_error_count++;
+            if (read_error_count <= 3 || (read_error_count % 20) == 0) {
+                log_warn("read device data error: device=%s errno=%d(%s) count=%d",
+                         device->filename ? device->filename : "(unknown)",
+                         errno,
+                         strerror(errno),
+                         read_error_count);
+            }
             usleep(100000);  // 读取错误，等待100ms后重试
             continue;
         }
+        read_error_count = 0;
         
         // 无数据，等待10ms
         if (buf_len == 0) {
@@ -395,7 +404,7 @@ int app_device_init(Device *device, char *filename)
     device->fd = open(device->filename, O_RDWR | O_NOCTTY);
     if (device->fd < 0)
     {
-        log_warn("Device open failed: %s", filename);
+        log_warn("Device open failed: %s errno=%d(%s)", filename, errno, strerror(errno));
         goto DEVICE_SEND_BUFFER_EXIT;
     }
     

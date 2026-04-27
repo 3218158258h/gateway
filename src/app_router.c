@@ -13,11 +13,14 @@
 #include "../include/app_router.h"
 #include "../include/app_message.h"
 #include "../include/app_device_layer.h"
+#include "../include/app_serial.h"
 #include "../include/app_config.h"
+#include "../thirdparty/cJSON/cJSON.h"
 #include "../thirdparty/log.c/log.h"
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <time.h>
 
 /* 默认配置常量 */
 #define ROUTER_DEFAULT_MESSAGE_SIZE 4096                          /* 默认消息缓冲区大小 */
@@ -106,38 +109,125 @@ static int json_to_binary_safe(const char *json_str, int json_len,
     return buf_len;
 }
 
-/**
- * @brief 将二进制数据安全转换为JSON字符串
- * 
- * 解析二进制格式的消息数据，转换为JSON字符串格式。
- * JSON格式：{"id":"xxx", "data":"xxx", "type":x}
- * 
- * @param binary 二进制数据指针
- * @param binary_len 二进制数据长度
- * @param buf 输出缓冲区，用于存储JSON字符串
- * @param buf_size 输出缓冲区大小
- * @return 转换后的JSON字符串长度，失败返回-1
- */
-static int binary_to_json_safe(const void *binary, int binary_len,
-                                char *buf, int buf_size)
+static const char *router_protocol_family(AppInterfaceType interface_type)
 {
-    if (!binary || !buf || binary_len <= 0 || buf_size <= 0) {
+    switch (interface_type) {
+    case APP_INTERFACE_I2C:
+        return "i2c_reg";
+    case APP_INTERFACE_SPI:
+        return "spi_cmd";
+    case APP_INTERFACE_CAN:
+        return "can_raw";
+    case APP_INTERFACE_SERIAL:
+    default:
+        return "serial_private";
+    }
+}
+
+static long long router_now_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        return 0;
+    }
+    return (long long)ts.tv_sec * 1000LL + (long long)ts.tv_nsec / 1000000LL;
+}
+
+static char *router_bin_to_hex(const unsigned char *binary, int len)
+{
+    if (!binary || len <= 0) {
+        return strdup("");
+    }
+    char *hex_str = malloc((size_t)len * 2 + 1);
+    if (!hex_str) {
+        return NULL;
+    }
+    for (int i = 0; i < len; i++) {
+        snprintf(hex_str + i * 2, 3, "%02X", binary[i]);
+    }
+    hex_str[len * 2] = '\0';
+    return hex_str;
+}
+
+static int binary_to_envelope_json(const void *binary, int binary_len,
+                                   const Device *device, char *buf, int buf_size)
+{
+    if (!binary || !device || !buf || binary_len <= 0 || buf_size <= 0) {
         return -1;
     }
-    
+
     Message message;
     memset(&message, 0, sizeof(Message));
-    
-    /* 从二进制数据初始化消息结构 */
     if (app_message_initByBinary(&message, (void *)binary, binary_len) < 0) {
         return -1;
     }
-    
-    /* 转换为JSON格式 */
-    int result = app_message_saveJson(&message, buf, buf_size);
+
+    const SerialDevice *serial_device = (const SerialDevice *)device;
+    AppInterfaceType interface_type = serial_device->transport.interface_type;
+    const char *interface_name = app_transport_interface_to_string(interface_type);
+    const char *protocol_family = router_protocol_family(interface_type);
+    const char *protocol_name = serial_device->transport.protocol_name[0] ?
+                                serial_device->transport.protocol_name : "unknown";
+
+    char *id_hex = router_bin_to_hex(message.payload, message.id_len);
+    char *data_hex = router_bin_to_hex(message.payload + message.id_len, message.data_len);
+    if (!id_hex || !data_hex) {
+        app_message_free(&message);
+        free(id_hex);
+        free(data_hex);
+        return -1;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *payload = cJSON_CreateObject();
+    if (!root || !payload) {
+        app_message_free(&message);
+        free(id_hex);
+        free(data_hex);
+        cJSON_Delete(root);
+        cJSON_Delete(payload);
+        return -1;
+    }
+
+    cJSON_AddNumberToObject(root, "schema_version", 1);
+    cJSON_AddStringToObject(root, "interface", interface_name ? interface_name : "unknown");
+    cJSON_AddStringToObject(root, "device_path", device->filename ? device->filename : "");
+    cJSON_AddStringToObject(root, "protocol_family", protocol_family);
+    cJSON_AddStringToObject(root, "protocol_name", protocol_name);
+    cJSON_AddNumberToObject(root, "timestamp_ms", (double)router_now_ms());
+    cJSON_AddNumberToObject(root, "payload_len", message.data_len);
+
+    cJSON_AddNumberToObject(payload, "connection_type", message.connection_type);
+    cJSON_AddStringToObject(payload, "id", id_hex);
+    cJSON_AddStringToObject(payload, "data", data_hex);
+    cJSON_AddItemToObject(root, "payload", payload);
+
+    char *json_str = cJSON_PrintUnformatted(root);
+    if (!json_str) {
+        app_message_free(&message);
+        free(id_hex);
+        free(data_hex);
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    int json_len = (int)strlen(json_str);
+    if (json_len + 1 > buf_size) {
+        cJSON_free(json_str);
+        app_message_free(&message);
+        free(id_hex);
+        free(data_hex);
+        cJSON_Delete(root);
+        return -1;
+    }
+    memcpy(buf, json_str, (size_t)json_len + 1);
+
+    cJSON_free(json_str);
     app_message_free(&message);
-    
-    return (result == 0) ? (int)strlen(buf) : -1;
+    free(id_hex);
+    free(data_hex);
+    cJSON_Delete(root);
+    return json_len;
 }
 
 /**
@@ -265,7 +355,7 @@ static int on_device_message(void *context, void *ptr, int len)
     if (!buf) return -1;
     
     /* 将二进制格式转换为JSON格式 */
-    int json_len = binary_to_json_safe(ptr, len, buf, max_message_size);
+    int json_len = binary_to_envelope_json(ptr, len, ctx->device, buf, max_message_size);
     if (json_len < 0) {
         free(buf);
         return -1;

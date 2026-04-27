@@ -29,7 +29,10 @@
 static const char *SQL_CREATE_TABLE = 
     "CREATE TABLE IF NOT EXISTS messages ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"     /* 消息 ID（自增主键） */
-    "topic TEXT NOT NULL,"                       /* 消息主题 */
+    "device_path TEXT NOT NULL,"                /* 设备路径 */
+    "interface_name TEXT NOT NULL,"             /* 接口名称 */
+    "protocol_family TEXT NOT NULL,"            /* 协议族 */
+    "protocol_name TEXT NOT NULL,"              /* 协议名称 */
     "payload BLOB NOT NULL,"                     /* 消息内容（二进制） */
     "payload_len INTEGER NOT NULL,"              /* 消息长度 */
     "qos INTEGER DEFAULT 0,"                     /* 服务质量级别 */
@@ -42,6 +45,136 @@ static const char *SQL_CREATE_TABLE =
 /* 创建索引 SQL 语句（优化状态查询）。 */
 static const char *SQL_CREATE_INDEX = 
     "CREATE INDEX IF NOT EXISTS idx_status ON messages(status);";
+
+/* 创建设备路径索引 SQL 语句（优化按设备维度排障）。 */
+static const char *SQL_CREATE_DEVICE_PATH_INDEX =
+    "CREATE INDEX IF NOT EXISTS idx_device_path ON messages(device_path);";
+
+/* 判断数据表是否存在指定列。 */
+static int table_has_column(sqlite3 *db, const char *table_name, const char *column_name)
+{
+    if (!db || !table_name || !column_name) {
+        return 0;
+    }
+
+    char sql[256];
+    snprintf(sql, sizeof(sql), "PRAGMA table_info(%s);", table_name);
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+
+    int found = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *name = (const char *)sqlite3_column_text(stmt, 1);
+        if (name && strcmp(name, column_name) == 0) {
+            found = 1;
+            break;
+        }
+    }
+
+    sqlite3_finalize(stmt);
+    return found;
+}
+
+/* 旧版 messages 表迁移到新版字段。 */
+static int migrate_messages_table(sqlite3 *db)
+{
+    if (!db) {
+        return -1;
+    }
+
+    const int has_topic = table_has_column(db, "messages", "topic");
+    const int has_device_path = table_has_column(db, "messages", "device_path");
+    const int has_interface_name = table_has_column(db, "messages", "interface_name");
+    const int has_protocol_family = table_has_column(db, "messages", "protocol_family");
+    const int has_protocol_name = table_has_column(db, "messages", "protocol_name");
+
+    if (!has_topic && has_device_path && has_interface_name &&
+        has_protocol_family && has_protocol_name) {
+        return 0;
+    }
+
+    log_info("Persistence schema migration started for table messages");
+
+    char *err_msg = NULL;
+    if (sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION;", NULL, NULL, &err_msg) != SQLITE_OK) {
+        log_error("Failed to begin migration transaction: %s", err_msg ? err_msg : "unknown");
+        sqlite3_free(err_msg);
+        return -1;
+    }
+
+    int rc = sqlite3_exec(db, "ALTER TABLE messages RENAME TO messages_legacy;", NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+        log_error("Failed to rename legacy table: %s", err_msg ? err_msg : "unknown");
+        sqlite3_free(err_msg);
+        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+        return -1;
+    }
+
+    rc = sqlite3_exec(db, SQL_CREATE_TABLE, NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+        log_error("Failed to create new messages table: %s", err_msg ? err_msg : "unknown");
+        sqlite3_free(err_msg);
+        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+        return -1;
+    }
+
+    char copy_sql[2048];
+    snprintf(copy_sql, sizeof(copy_sql),
+             "INSERT INTO messages ("
+             "id, device_path, interface_name, protocol_family, protocol_name, "
+             "payload, payload_len, qos, status, retry_count, create_time, update_time"
+             ") "
+             "SELECT "
+             "id, "
+             "%s, "
+             "%s, "
+             "%s, "
+             "%s, "
+             "payload, payload_len, qos, status, retry_count, create_time, update_time "
+             "FROM messages_legacy;",
+             has_device_path ?
+             "CASE WHEN device_path IS NULL THEN '' ELSE device_path END" :
+             "''",
+             has_interface_name ?
+             "CASE WHEN interface_name IS NULL OR interface_name = '' THEN 'unknown' ELSE interface_name END" :
+             "'unknown'",
+             has_protocol_family ?
+             "CASE WHEN protocol_family IS NULL OR protocol_family = '' THEN 'unknown' ELSE protocol_family END" :
+             "'unknown'",
+             has_protocol_name ?
+             "CASE WHEN protocol_name IS NULL OR protocol_name = '' THEN 'unknown' ELSE protocol_name END" :
+             "'unknown'");
+
+    rc = sqlite3_exec(db, copy_sql, NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+        log_error("Failed to copy legacy messages: %s", err_msg ? err_msg : "unknown");
+        sqlite3_free(err_msg);
+        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+        return -1;
+    }
+
+    rc = sqlite3_exec(db, "DROP TABLE messages_legacy;", NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+        log_error("Failed to drop legacy table: %s", err_msg ? err_msg : "unknown");
+        sqlite3_free(err_msg);
+        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+        return -1;
+    }
+
+    rc = sqlite3_exec(db, "COMMIT;", NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+        log_error("Failed to commit migration: %s", err_msg ? err_msg : "unknown");
+        sqlite3_free(err_msg);
+        sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+        return -1;
+    }
+
+    log_info("Persistence schema migration completed");
+    return 0;
+}
 
 /* 递归创建目录（mkdir -p）。 */
 static int ensure_dir_exists(const char *dir_path)
@@ -162,9 +295,19 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
         sqlite3_close(db);
         return -1;
     }
+
+    if (migrate_messages_table(db) != 0) {
+        sqlite3_close(db);
+        return -1;
+    }
     
     // 创建状态索引
     rc = sqlite3_exec(db, SQL_CREATE_INDEX, NULL, NULL, &err_msg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(err_msg);
+    }
+
+    rc = sqlite3_exec(db, SQL_CREATE_DEVICE_PATH_INDEX, NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
         sqlite3_free(err_msg);
     }
@@ -206,17 +349,24 @@ void persistence_close(PersistenceManager *manager)
  * 将消息持久化存储，用于离线重发场景。
  * 
  * @param manager 持久化管理器指针
- * @param topic 消息主题
+ * @param device_path 设备路径
+ * @param interface_name 接口名称
+ * @param protocol_family 协议族
+ * @param protocol_name 协议名称
  * @param payload 消息内容
  * @param len 消息长度
  * @param qos QoS级别
  * @param out_id 输出消息ID
  * @return 0成功，-1失败
  */
-int persistence_save(PersistenceManager *manager, const char *topic,
+int persistence_save(PersistenceManager *manager,
+                     const char *device_path,
+                     const char *interface_name,
+                     const char *protocol_family,
+                     const char *protocol_name,
                      const void *payload, size_t len, int qos, uint64_t *out_id)
 {
-    if (!manager || !manager->is_initialized || !topic || !payload) {
+    if (!manager || !manager->is_initialized || !payload) {
         return -1;
     }
     
@@ -224,9 +374,9 @@ int persistence_save(PersistenceManager *manager, const char *topic,
     time_t now = time(NULL);
     
     // 插入消息SQL语句
-    const char *sql = "INSERT INTO messages (topic, payload, payload_len, qos, "
-                      "status, retry_count, create_time, update_time) "
-                      "VALUES (?, ?, ?, ?, 0, 0, ?, ?);";
+    const char *sql = "INSERT INTO messages (device_path, interface_name, protocol_family, protocol_name, "
+                      "payload, payload_len, qos, status, retry_count, create_time, update_time) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?);";
     
     // 预编译SQL语句
     sqlite3_stmt *stmt;
@@ -237,12 +387,15 @@ int persistence_save(PersistenceManager *manager, const char *topic,
     }
     
     // 绑定参数
-    sqlite3_bind_text(stmt, 1, topic, -1, SQLITE_STATIC);           // 主题
-    sqlite3_bind_blob(stmt, 2, payload, len, SQLITE_TRANSIENT);     // 内容
-    sqlite3_bind_int(stmt, 3, len);                                  // 长度
-    sqlite3_bind_int(stmt, 4, qos);                                  // 服务质量
-    sqlite3_bind_int64(stmt, 5, now);                                // 创建时间
-    sqlite3_bind_int64(stmt, 6, now);                                // 更新时间
+    sqlite3_bind_text(stmt, 1, device_path ? device_path : "", -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, interface_name ? interface_name : "unknown", -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, protocol_family ? protocol_family : "unknown", -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 4, protocol_name ? protocol_name : "unknown", -1, SQLITE_STATIC);
+    sqlite3_bind_blob(stmt, 5, payload, len, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 6, (int)len);
+    sqlite3_bind_int(stmt, 7, qos);
+    sqlite3_bind_int64(stmt, 8, now);
+    sqlite3_bind_int64(stmt, 9, now);
     
     // 执行插入
     rc = sqlite3_step(stmt);
@@ -262,8 +415,12 @@ int persistence_save(PersistenceManager *manager, const char *topic,
     
     sqlite3_finalize(stmt);
     
-    log_trace("Message saved: id=%llu, topic=%s, len=%zu", 
-              (unsigned long long)id, topic, len);
+    log_trace("Message saved: id=%llu, device_path=%s, interface=%s, protocol=%s, len=%zu",
+              (unsigned long long)id,
+              device_path ? device_path : "",
+              interface_name ? interface_name : "unknown",
+              protocol_name ? protocol_name : "unknown",
+              len);
     return 0;
 }
 
@@ -285,7 +442,8 @@ int persistence_get_next(PersistenceManager *manager, PersistMessage *out_messag
     sqlite3 *db = (sqlite3 *)manager->db;
     
     // 查询待发送消息（按创建时间升序）
-    const char *sql = "SELECT id, topic, payload, payload_len, qos, status, "
+    const char *sql = "SELECT id, device_path, interface_name, protocol_family, protocol_name, "
+                      "payload, payload_len, qos, status, "
                       "retry_count, create_time, update_time "
                       "FROM messages WHERE status = 0 "
                       "AND retry_count < ? "
@@ -313,12 +471,18 @@ int persistence_get_next(PersistenceManager *manager, PersistMessage *out_messag
     
     // 读取消息字段
     out_message->id = sqlite3_column_int64(stmt, 0);
-    strncpy(out_message->topic, (const char *)sqlite3_column_text(stmt, 1), 
-            sizeof(out_message->topic) - 1);
+    const char *device_path = (const char *)sqlite3_column_text(stmt, 1);
+    const char *interface_name = (const char *)sqlite3_column_text(stmt, 2);
+    const char *protocol_family = (const char *)sqlite3_column_text(stmt, 3);
+    const char *protocol_name = (const char *)sqlite3_column_text(stmt, 4);
+    snprintf(out_message->device_path, sizeof(out_message->device_path), "%s", device_path ? device_path : "");
+    snprintf(out_message->interface_name, sizeof(out_message->interface_name), "%s", interface_name ? interface_name : "");
+    snprintf(out_message->protocol_family, sizeof(out_message->protocol_family), "%s", protocol_family ? protocol_family : "");
+    snprintf(out_message->protocol_name, sizeof(out_message->protocol_name), "%s", protocol_name ? protocol_name : "");
     
     // 读取消息内容（需要复制）
-    const void *payload = sqlite3_column_blob(stmt, 2);
-    int payload_len = sqlite3_column_int(stmt, 3);
+    const void *payload = sqlite3_column_blob(stmt, 5);
+    int payload_len = sqlite3_column_int(stmt, 6);
     
     out_message->payload = malloc(payload_len);
     if (!out_message->payload) {
@@ -332,11 +496,11 @@ int persistence_get_next(PersistenceManager *manager, PersistMessage *out_messag
     }
     
     // 读取其他字段
-    out_message->qos = sqlite3_column_int(stmt, 4);
-    out_message->status = sqlite3_column_int(stmt, 5);
-    out_message->retry_count = sqlite3_column_int(stmt, 6);
-    out_message->create_time = sqlite3_column_int64(stmt, 7);
-    out_message->update_time = sqlite3_column_int64(stmt, 8);
+    out_message->qos = sqlite3_column_int(stmt, 7);
+    out_message->status = sqlite3_column_int(stmt, 8);
+    out_message->retry_count = sqlite3_column_int(stmt, 9);
+    out_message->create_time = sqlite3_column_int64(stmt, 10);
+    out_message->update_time = sqlite3_column_int64(stmt, 11);
     
     sqlite3_finalize(stmt);
     
@@ -523,7 +687,8 @@ int persistence_get_all_pending(PersistenceManager *manager,
     sqlite3 *db = (sqlite3 *)manager->db;
     
     // 批量查询待发送消息
-    const char *sql = "SELECT id, topic, payload, payload_len, qos, status, "
+    const char *sql = "SELECT id, device_path, interface_name, protocol_family, protocol_name, "
+                      "payload, payload_len, qos, status, "
                       "retry_count, create_time, update_time "
                       "FROM messages WHERE status = 0 "
                       "AND retry_count < ? "
@@ -547,12 +712,18 @@ int persistence_get_all_pending(PersistenceManager *manager,
         
         // 读取消息字段
         msg->id = sqlite3_column_int64(stmt, 0);
-        strncpy(msg->topic, (const char *)sqlite3_column_text(stmt, 1), 
-                sizeof(msg->topic) - 1);
+        const char *device_path = (const char *)sqlite3_column_text(stmt, 1);
+        const char *interface_name = (const char *)sqlite3_column_text(stmt, 2);
+        const char *protocol_family = (const char *)sqlite3_column_text(stmt, 3);
+        const char *protocol_name = (const char *)sqlite3_column_text(stmt, 4);
+        snprintf(msg->device_path, sizeof(msg->device_path), "%s", device_path ? device_path : "");
+        snprintf(msg->interface_name, sizeof(msg->interface_name), "%s", interface_name ? interface_name : "");
+        snprintf(msg->protocol_family, sizeof(msg->protocol_family), "%s", protocol_family ? protocol_family : "");
+        snprintf(msg->protocol_name, sizeof(msg->protocol_name), "%s", protocol_name ? protocol_name : "");
         
         // 复制消息内容
-        const void *payload = sqlite3_column_blob(stmt, 2);
-        int payload_len = sqlite3_column_int(stmt, 3);
+        const void *payload = sqlite3_column_blob(stmt, 5);
+        int payload_len = sqlite3_column_int(stmt, 6);
         
         msg->payload = malloc(payload_len);
         if (msg->payload) {
@@ -565,11 +736,11 @@ int persistence_get_all_pending(PersistenceManager *manager,
         }
         
         // 读取其他字段
-        msg->qos = sqlite3_column_int(stmt, 4);
-        msg->status = sqlite3_column_int(stmt, 5);
-        msg->retry_count = sqlite3_column_int(stmt, 6);
-        msg->create_time = sqlite3_column_int64(stmt, 7);
-        msg->update_time = sqlite3_column_int64(stmt, 8);
+        msg->qos = sqlite3_column_int(stmt, 7);
+        msg->status = sqlite3_column_int(stmt, 8);
+        msg->retry_count = sqlite3_column_int(stmt, 9);
+        msg->create_time = sqlite3_column_int64(stmt, 10);
+        msg->update_time = sqlite3_column_int64(stmt, 11);
         
         count++;
     }
