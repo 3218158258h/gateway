@@ -395,3 +395,73 @@ open(LOG_FILE, O_RDWR | O_CREAT, 0644);
 - `README.md`
 - `gateway.md`
 - `Bug.md`
+
+---
+
+## 17. 虚拟节点脚本命名存在歧义，且缺少 I2C/SPI 联调脚本
+
+### 问题说明
+原有脚本 `create_virtual_nodes.sh` 默认只创建串口（UART）节点，但命名过于泛化，容易让人误解为“可创建任意接口虚拟节点”。  
+同时缺少 I2C/SPI 风格节点脚本，联调入口不完整。
+
+### 问题代码形态（修复前）
+- 仅有 `scripts/create_virtual_nodes.sh`（实际依赖 `socat` 创建串口 PTY 对）。
+- 仅有 `scripts/monitor_virtual_port.sh`，未体现 UART 语义。
+
+### 修复思路
+1. 明确脚本语义：以接口名入脚本名，避免歧义。  
+2. 保持兼容：旧脚本保留为包装器，给出 deprecate 提示并转发到新脚本。  
+3. 补齐 I2C/SPI 接口联调脚本。  
+4. 同步文档，明确“模拟节点”和“真实内核设备”的边界。
+
+### 实际改动
+- 新增：
+  - `scripts/create_virtual_uart_nodes.sh`
+  - `scripts/create_virtual_i2c_nodes.sh`
+  - `scripts/create_virtual_spi_nodes.sh`
+  - `scripts/monitor_virtual_uart_port.sh`
+- 兼容包装：
+  - `scripts/create_virtual_nodes.sh`（deprecated，转发到 UART 脚本）
+  - `scripts/monitor_virtual_port.sh`（deprecated，转发到 UART 监控脚本）
+- UART 脚本命名升级：
+  - 新节点：`uart-gwN / uart-simN`
+  - 兼容软链：`gwN / simN`
+- 文档更新：
+  - `README.md`：新增多接口脚本用法与说明
+  - `gateway.md`：新增联调脚本命名约定章节
+
+### 我的看法
+脚本名就是运维接口。命名不清会直接造成误用成本。  
+此次拆分后，“脚本名即能力边界”更明确，且保留旧入口，风险可控。
+
+---
+
+## 18. 缺少 CAN 虚拟接口创建脚本，联调链路不完整
+
+### 问题说明
+补齐 UART/I2C/SPI 后，仍缺少 CAN 联调入口。  
+测试人员只能手工敲 `ip link`，流程不统一、复现成本高。
+
+### 问题代码形态（修复前）
+- `scripts/` 下没有 CAN 接口创建脚本。
+- 文档没有给出 CAN 虚拟接口标准步骤。
+
+### 修复思路
+1. 新增 `create_virtual_can_nodes.sh`。  
+2. 统一支持数量、前缀、映射文件输出。  
+3. 文档同步，明确 CAN 用 `vcan`，I2C/SPI 用 PTY 模拟。
+
+### 实际改动
+- 新增：
+  - `scripts/create_virtual_can_nodes.sh`
+    - 使用 `ip link add dev <name> type vcan`
+    - 自动 `ip link set up <name>`
+    - 输出映射文件：`index iface name state`
+    - 支持参数：`COUNT PREFIX MAP_FILE`
+    - 支持环境变量：`START_INDEX`
+- 文档更新：
+  - `README.md`：新增 CAN 脚本用法与说明
+  - `gateway.md`：联调脚本命名约定新增 CAN
+
+### 我的看法
+CAN 场景优先采用 `vcan` 是更工程化的做法：比 PTY 更贴近 socketCAN 使用方式，调试价值更高。

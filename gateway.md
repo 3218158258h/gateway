@@ -165,3 +165,22 @@
 - `problem.md`：本轮问题与修复细节  
 - `迭代计划.md`：优化清单状态  
 - `count.md`：压测记录模板
+
+---
+
+## 9. 联调脚本命名约定（2026-04 更新）
+
+- UART 虚拟节点：`scripts/create_virtual_uart_nodes.sh`
+  - 节点命名：`uart-gwN / uart-simN`
+  - 兼容软链：`gwN / simN`
+- I2C 虚拟节点：`scripts/create_virtual_i2c_nodes.sh`
+  - 节点命名：`i2c-gwN / i2c-simN`
+- SPI 虚拟节点：`scripts/create_virtual_spi_nodes.sh`
+  - 节点命名：`spi-gwN / spi-simN`
+- CAN 虚拟接口：`scripts/create_virtual_can_nodes.sh`
+  - 接口命名：`<prefix><index>`（默认 `vcan0/vcan1/...`）
+
+说明：
+- I2C/SPI 脚本生成的是“字节流模拟节点（PTY）”，用于网关应用层联调。
+- 若要验证真实内核 `i2c-dev/spidev` ioctl 行为，需使用目标板内核驱动和真实总线设备。
+- CAN 脚本使用 Linux `vcan`，更接近真实 CAN socket 使用方式（需内核支持 vcan）。
