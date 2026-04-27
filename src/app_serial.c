@@ -188,7 +188,9 @@ static int app_serial_setRaw(SerialDevice *serial_device)
 int app_serial_init(SerialDevice *serial_device, char *filename)
 {
     if (!serial_device || !filename) return -1;
-    app_transport_config_load(serial_device, APP_PHYSICAL_TRANSPORT_CONFIG_FILE, "transport.serial_default");
+    if (serial_device->transport.device_path[0] == '\0') {
+        app_transport_config_load(serial_device, APP_PHYSICAL_TRANSPORT_CONFIG_FILE, "transport.serial_default");
+    }
     serial_device->transport.interface_type = APP_INTERFACE_SERIAL;
     snprintf(serial_device->transport.device_path, sizeof(serial_device->transport.device_path), "%s", filename);
 

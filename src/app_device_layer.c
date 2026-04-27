@@ -91,9 +91,57 @@ static int app_device_layer_send_command(SerialDevice *serial_device, const char
     return app_bluetooth_sendCommand(serial_device, cmd);
 }
 
-static int app_device_layer_apply_protocol(SerialDevice *serial_device, const char *protocol_name)
+static int app_device_layer_apply_protocol_non_serial(SerialDevice *serial_device,
+                                                       const char *protocol_name,
+                                                       const BluetoothProtocolConfig *protocol)
 {
-    if (!serial_device || !serial_device->super.vptr || serial_device->super.fd < 0) {
+    if (!serial_device || !protocol) {
+        return -1;
+    }
+
+    serial_device->super.connection_type = protocol->connection_type;
+
+    if (serial_device->transport.interface_type == APP_INTERFACE_CAN) {
+        /* CAN 设备在链路层已绑定 can_post_read/can_pre_write，不覆盖钩子。 */
+        app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURED);
+        log_info("[protocol] event=apply_success device=%s protocol=%s interface=%s connection_type=%d init_cmds=%d ack_len=%d",
+                 serial_device->super.filename ? serial_device->super.filename : "",
+                 protocol_name ? protocol_name : "",
+                 app_transport_interface_to_string(serial_device->transport.interface_type),
+                 (int)protocol->connection_type,
+                 protocol->init_cmds_count,
+                 protocol->ack_frame_len);
+        return 0;
+    }
+
+    app_bluetooth_clear_context(serial_device->super.fd);
+    if (app_bluetooth_set_protocol_config(serial_device, protocol) != 0) {
+        log_error("[protocol] event=bind_failed device=%s protocol=%s interface=%s",
+                  serial_device->super.filename ? serial_device->super.filename : "",
+                  protocol_name ? protocol_name : "",
+                  app_transport_interface_to_string(serial_device->transport.interface_type));
+        app_device_layer_set_state(&serial_device->super, DEVICE_STATE_ERROR);
+        return -1;
+    }
+
+    serial_device->super.vptr->post_read = app_bluetooth_postRead;
+    serial_device->super.vptr->pre_write = app_bluetooth_preWrite;
+    app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURED);
+    log_info("[protocol] event=apply_success device=%s protocol=%s interface=%s connection_type=%d init_cmds=%d ack_len=%d",
+             serial_device->super.filename ? serial_device->super.filename : "",
+             protocol_name ? protocol_name : "",
+             app_transport_interface_to_string(serial_device->transport.interface_type),
+             (int)protocol->connection_type,
+             protocol->init_cmds_count,
+             protocol->ack_frame_len);
+    return 0;
+}
+
+static int app_device_layer_apply_protocol_serial(SerialDevice *serial_device,
+                                                  const char *protocol_name,
+                                                  const BluetoothProtocolConfig *protocol)
+{
+    if (!serial_device || !protocol || !serial_device->super.vptr || serial_device->super.fd < 0) {
         log_error("[protocol] event=apply_rejected reason=invalid_device_handle protocol=%s",
                   protocol_name ? protocol_name : "");
         return -1;
@@ -105,18 +153,9 @@ static int app_device_layer_apply_protocol(SerialDevice *serial_device, const ch
     DeviceLayerRuntimeConfig runtime = {0};
     app_device_layer_load_runtime_config(&runtime);
 
-    BluetoothProtocolConfig protocol = {0};
-    if (app_protocol_load_bluetooth(protocol_name, &protocol) != 0) {
-        log_error("[protocol] event=load_failed device=%s protocol=%s",
-                  serial_device->super.filename ? serial_device->super.filename : "",
-                  protocol_name ? protocol_name : "");
-        app_device_layer_set_state(&serial_device->super, DEVICE_STATE_ERROR);
-        return -1;
-    }
-
     /* 协议层和传输层在这里完成绑定。 */
     app_bluetooth_clear_context(serial_device->super.fd);
-    if (app_bluetooth_set_protocol_config(serial_device, &protocol) != 0) {
+    if (app_bluetooth_set_protocol_config(serial_device, protocol) != 0) {
         log_error("[protocol] event=bind_failed device=%s protocol=%s",
                   serial_device->super.filename ? serial_device->super.filename : "",
                   protocol_name ? protocol_name : "");
@@ -124,7 +163,7 @@ static int app_device_layer_apply_protocol(SerialDevice *serial_device, const ch
         return -1;
     }
 
-    serial_device->super.connection_type = protocol.connection_type;
+    serial_device->super.connection_type = protocol->connection_type;
     serial_device->super.vptr->post_read = app_bluetooth_postRead;
     serial_device->super.vptr->pre_write = app_bluetooth_preWrite;
 
@@ -135,25 +174,25 @@ static int app_device_layer_apply_protocol(SerialDevice *serial_device, const ch
         return -1;
     }
 
-    if (protocol.status_cmd[0] != '\0') {
-        if (app_device_layer_send_command(serial_device, protocol.status_cmd) != 0) {
+    if (protocol->status_cmd[0] != '\0') {
+        if (app_device_layer_send_command(serial_device, protocol->status_cmd) != 0) {
             log_error("[protocol] event=status_check_failed device=%s protocol=%s cmd=%s",
                       serial_device->super.filename ? serial_device->super.filename : "",
                       protocol_name ? protocol_name : "",
-                      protocol.status_cmd);
+                      protocol->status_cmd);
             app_device_layer_set_state(&serial_device->super, DEVICE_STATE_ERROR);
             return -1;
         }
     }
 
-    for (int i = 0; i < protocol.init_cmds_count; i++) {
+    for (int i = 0; i < protocol->init_cmds_count; i++) {
         char expanded[APP_PROTOCOL_INIT_CMD_MAX_LEN];
         AppProtocolPlaceholder placeholders[] = {
             {"m_addr", runtime.m_addr},
             {"net_id", runtime.net_id},
             {"baud_code", (runtime.work_baud == SERIAL_BAUD_RATE_9600) ? "4" : "8"},
         };
-        if (app_private_protocol_expand_template(protocol.init_cmds[i], expanded, sizeof(expanded),
+        if (app_private_protocol_expand_template(protocol->init_cmds[i], expanded, sizeof(expanded),
                                                  placeholders, 3) < 0) {
             continue;
         }
@@ -183,10 +222,37 @@ static int app_device_layer_apply_protocol(SerialDevice *serial_device, const ch
     log_info("[protocol] event=apply_success device=%s protocol=%s connection_type=%d init_cmds=%d ack_len=%d",
              serial_device->super.filename ? serial_device->super.filename : "",
              protocol_name ? protocol_name : "",
-             (int)protocol.connection_type,
-             protocol.init_cmds_count,
-             protocol.ack_frame_len);
+             (int)protocol->connection_type,
+             protocol->init_cmds_count,
+             protocol->ack_frame_len);
     return 0;
+}
+
+static int app_device_layer_apply_protocol(SerialDevice *serial_device, const char *protocol_name)
+{
+    if (!serial_device || !serial_device->super.vptr || serial_device->super.fd < 0) {
+        log_error("[protocol] event=apply_rejected reason=invalid_device_handle protocol=%s",
+                  protocol_name ? protocol_name : "");
+        return -1;
+    }
+
+    app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURING);
+
+    BluetoothProtocolConfig protocol = {0};
+    if (app_protocol_load_bluetooth(protocol_name, &protocol) != 0) {
+        log_error("[protocol] event=load_failed device=%s protocol=%s interface=%s",
+                  serial_device->super.filename ? serial_device->super.filename : "",
+                  protocol_name ? protocol_name : "",
+                  app_transport_interface_to_string(serial_device->transport.interface_type));
+        app_device_layer_set_state(&serial_device->super, DEVICE_STATE_ERROR);
+        return -1;
+    }
+
+    if (serial_device->transport.interface_type == APP_INTERFACE_SERIAL) {
+        return app_device_layer_apply_protocol_serial(serial_device, protocol_name, &protocol);
+    }
+
+    return app_device_layer_apply_protocol_non_serial(serial_device, protocol_name, &protocol);
 }
 
 int app_device_layer_init(SerialDevice *device, const char *device_path, const char *interface_name)
@@ -201,6 +267,7 @@ int app_device_layer_init(SerialDevice *device, const char *device_path, const c
     }
     return result;
 }
+
 
 int app_device_layer_configure(SerialDevice *device, const char *protocol_name)
 {

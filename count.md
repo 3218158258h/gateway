@@ -1,6 +1,6 @@
 # 压测计数与结果记录
 
-## 场景 1：高频消息上行（设备 -> 云端）
+### 场景 1：高频(100Hz)消息上行（设备 -> 云端）
 
 命令：
 ```bash
@@ -9,7 +9,7 @@ python3 scripts/simulate_lower_device.py \
   --device-id 0001 \
   --payload 01020304 \
   --count 1000 \
-  --interval 0.01
+  --interval 0.01 
 ```
 
 结果（历史记录）：
@@ -41,8 +41,6 @@ test/publisher --device-type ble_mesh --count 1000 --interval-ms 10
 - 设备侧实际收到条数
 - 回执/ACK 比例
 - 失败重试次数
-
-## 本轮修复后的新增观察点
 
 - `[snapshot]`：启动配置是否符合预期
 - `[device]`：设备初始化失败是否被隔离

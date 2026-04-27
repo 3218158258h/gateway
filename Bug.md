@@ -204,20 +204,7 @@ static int on_device_message(void *ptr, int len) {
 
 ---
 
-## 修改文件清单
 
-- `include/app_device.h`
-- `src/app_device.c`
-- `include/app_router.h`
-- `src/app_router.c`
-- `include/app_transport.h`
-- `src/dds/app_transport.c`
-- `src/app_protocol_config.c`
-- `src/app_device_layer.c`
-- `src/app_runner.c`
-- `problem.md`
-
----
 
 ## 10. 守护进程无限重启，异常时会形成重启风暴
 
@@ -269,8 +256,6 @@ daemon_process_start(&subprocess[1]);
   - 新增 `start_subprocess_at(index, is_retry)`
   - 初次启动和重启路径都改为统一入口，失败不再静默
 
-### 我的看法
-守护逻辑里“启动失败”必须是一等公民事件，否则监控与告警都会失真。
 
 ---
 
@@ -382,19 +367,6 @@ open(LOG_FILE, O_RDWR | O_CREAT, 0644);
 
 ---
 
-## 本次新增/修改文件（守护进程专项）
-
-- `include/daemon_config.h`
-- `include/daemon_process.h`
-- `include/daemon_runner.h`
-- `src/daemon/daemon_config.c`
-- `src/daemon/daemon_process.c`
-- `src/daemon/daemon_runner.c`
-- `config/daemon.ini`
-- `Makefile`
-- `README.md`
-- `gateway.md`
-- `Bug.md`
 
 ---
 
@@ -465,3 +437,74 @@ open(LOG_FILE, O_RDWR | O_CREAT, 0644);
 
 ### 我的看法
 CAN 场景优先采用 `vcan` 是更工程化的做法：比 PTY 更贴近 socketCAN 使用方式，调试价值更高。
+
+## 19. SPI/I2C/CAN 设备被错误套用串口协议流程
+
+### 问题说明
+在设备层协议应用阶段，旧逻辑默认按串口蓝牙流程执行：切波特率、设置阻塞模式、发送 AT/初始化命令。  
+这会导致非串口接口（SPI/I2C/CAN）在配置阶段误调用串口函数，出现配置失败或行为异常。
+
+### 问题代码形态（修复前）
+`src/app_device_layer.c` 中 `app_device_layer_apply_protocol(...)` 没有按接口分支，直接执行：
+```c
+app_serial_setBaudRate(...)
+app_serial_setBlockMode(...)
+app_serial_flush(...)
+app_device_layer_send_command(...)
+```
+这套流程只适用于 UART 类设备。
+
+### 修复思路
+- 把协议应用流程拆成“串口专用”和“非串口”两条路径。
+- 串口接口保持原有完整初始化流程（AT 状态检查 + init_cmds + 波特率切换）。
+- 非串口接口只做协议绑定，不再触发串口配置指令。
+- CAN 设备保留链路层专用 `post_read/pre_write` 钩子，不被协议层覆盖。
+
+### 实际改动
+- `src/app_device_layer.c`
+  - 新增 `app_device_layer_apply_protocol_serial(...)`
+  - 新增 `app_device_layer_apply_protocol_non_serial(...)`
+  - `app_device_layer_apply_protocol(...)` 中按 `transport.interface_type` 分流
+  - 非串口路径补充结构化日志，明确 `interface=...` 与协议应用结果
+
+### 我的看法
+设备层一定要“接口感知”。如果统一套串口流程，功能看似通用，实际是在引入隐性耦合。  
+这次分流后，SPI/I2C/CAN 至少具备稳定的初始化边界，后续扩展各接口专属策略也更清晰。
+
+---
+
+## 20. 物理接口默认节不完整，且 CAN/SPI 参数未真正下沉到底层句柄
+
+### 问题说明
+链路层已支持读取 `transport_physical.ini`，但配置文件里缺少 `spi_default/i2c_default/can_default`，  
+另外部分参数（例如 SPI 位序、CAN 回环/CAN FD）没有应用到实际设备句柄，导致“配置可写、运行不生效”。
+
+### 问题代码形态（修复前）
+- `config/transport_physical.ini` 只有 `transport.serial_default`，其余接口没有默认节。
+- `src/app_link_adapter.c`
+  - CAN 套接字只做 `socket/bind`，未设置 `CAN_RAW_LOOPBACK`、`CAN_RAW_FD_FRAMES`。
+  - SPI 初始化未设置 `SPI_IOC_WR_LSB_FIRST`。
+  - 物理配置加载失败分支缺少 `config_destroy` 清理。
+
+### 修复思路
+- 补全三类接口默认节，保证未命中具体节时仍有合理兜底。
+- 在链路初始化时把关键参数真正应用到底层 fd/socket。
+- 修正配置加载失败分支的资源释放，避免遗留对象。
+
+### 实际改动
+- `config/transport_physical.ini`
+  - 新增 `[transport.can_default]`
+  - 新增 `[transport.spi_default]`
+  - 新增 `[transport.i2c_default]`
+- `src/app_link_adapter.c`
+  - CAN 初始化新增 `setsockopt(... CAN_RAW_LOOPBACK ...)`
+  - CAN 初始化新增 `setsockopt(... CAN_RAW_FD_FRAMES ...)`
+  - SPI 初始化新增 `ioctl(... SPI_IOC_WR_LSB_FIRST ...)`
+  - `load_physical_config_for_device(...)` 加载失败分支补 `config_destroy(&cfg_mgr)`
+
+### 我的看法
+配置项“可配置”不等于“已生效”。  
+这次修复的重点是把配置链路从 `ini -> 内存结构 -> 系统调用` 打通，避免参数停留在日志层面。
+
+---
+
