@@ -57,6 +57,7 @@ cd <project-root>
 - `config/transport.ini`
 - `config/transport_physical.ini`
 - `config/protocols.ini`
+- `config/daemon.ini`
 - `gateway.ini`
 
 ### 3.1 传输配置
@@ -73,6 +74,13 @@ cd <project-root>
 
 ### 3.4 持久化
 `gateway.ini` 的 `[persistence]` 包含 SQLite 数据库与队列参数
+
+### 3.5 守护进程
+`config/daemon.ini` 包含守护进程参数：
+- 子进程二进制路径（`program_path`）
+- 日志重定向路径（`log_file`）
+- 崩溃阈值与重启退避策略（`max_crash_count`/`restart_backoff_*`）
+- 正常退出是否重启（`restart_on_normal_exit`）
 
 > 多蓝牙模块场景：每个蓝牙模块对应一个串口设备，把所有串口写到 `serial_devices`（逗号分隔）即可并行接入。
 
@@ -213,7 +221,8 @@ gateway/
 ├── config/
 │   ├── transport.ini
 │   ├── transport_physical.ini
-│   └── protocols.ini
+│   ├── protocols.ini
+│   └── daemon.ini
 ├── scripts/                     # 联调与运维脚本
 ├── test/                        # 协议链路测试程序
 ├── gateway.ini                  # 顶层总配置清单
@@ -253,6 +262,7 @@ gateway/
 - `config/transport.ini`：MQTT/DDS 逻辑传输参数。
 - `config/transport_physical.ini`：物理链路参数（串口/CAN/SPI/I2C 等扩展位）。
 - `config/protocols.ini`：私有协议定义（帧头帧尾、ACK/NACK、初始化指令等）。
+- `config/daemon.ini`：守护进程配置（子进程路径、重启阈值、退避、日志路径）。
 
 ### 7.4 脚本与测试
 

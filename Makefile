@@ -40,6 +40,7 @@ BASE_SRCS = $(SRC_DIR)/app_config.c \
             $(SRC_DIR)/app_serial.c \
             $(SRC_DIR)/app_task.c \
             $(SRC_DIR)/daemon/daemon_process.c \
+            $(SRC_DIR)/daemon/daemon_config.c \
             $(SRC_DIR)/daemon/daemon_runner.c
 
 # 源文件 - MQTT模块

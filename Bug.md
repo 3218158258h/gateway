@@ -216,3 +216,182 @@ static int on_device_message(void *ptr, int len) {
 - `src/app_device_layer.c`
 - `src/app_runner.c`
 - `problem.md`
+
+---
+
+## 10. 守护进程无限重启，异常时会形成重启风暴
+
+### 问题说明
+原守护逻辑在子进程异常退出后立即重启，且崩溃计数超过阈值后仍继续重启。  
+这会导致 CPU 抖动、日志爆炸、系统不可用。
+
+### 问题代码形态（修复前）
+`src/daemon/daemon_runner.c` 里即使 `crash_count > 10`，也仅写 marker，不阻断重启：
+```c
+if (crash_count > 10) { ... }
+daemon_process_start(&subprocess[i]);  // 继续重启
+```
+
+### 修复思路
+- 增加“熔断窗口”：超过阈值后进入阻断期，不再立即拉起。
+- 增加指数退避：异常越频繁，重启间隔越长，上限可配置。
+
+### 实际改动
+- `src/daemon/daemon_runner.c`
+  - 新增 `restart_block_until` 熔断逻辑
+  - 新增 `compute_backoff_ms()` 指数退避
+  - 新增 `check_restart_allowed()` 与 `note_abnormal_exit()`
+  - 超阈值时写 marker 并阻断重启
+
+### 我的看法
+守护进程的核心不是“重启”，而是“受控重启”。没有熔断和退避，守护进程本身会成为故障放大器。
+
+---
+
+## 11. 子进程启动失败返回值未处理，状态机会失真
+
+### 问题说明
+原代码调用 `daemon_process_start()` 后不检查返回值。  
+fork/exec 失败时守护进程可能认为“已拉起”，后续状态不可控。
+
+### 问题代码形态（修复前）
+```c
+daemon_process_start(&subprocess[0]);
+daemon_process_start(&subprocess[1]);
+```
+
+### 修复思路
+- 抽象统一启动入口 `start_subprocess_at()`。
+- 统一处理启动失败：计入崩溃计数、应用熔断/退避策略、日志明确化。
+
+### 实际改动
+- `src/daemon/daemon_runner.c`
+  - 新增 `start_subprocess_at(index, is_retry)`
+  - 初次启动和重启路径都改为统一入口，失败不再静默
+
+### 我的看法
+守护逻辑里“启动失败”必须是一等公民事件，否则监控与告警都会失真。
+
+---
+
+## 12. 标准流重定向不安全，日志文件打开方式不正确
+
+### 问题说明
+原实现直接 `close(0/1/2)` 再 `open()`，不校验返回 fd 与重定向结果；  
+并且日志文件未使用追加模式，存在覆盖风险。
+
+### 问题代码形态（修复前）
+```c
+close(STDIN_FILENO); close(STDOUT_FILENO); close(STDERR_FILENO);
+open("/dev/null", O_RDWR);
+open(LOG_FILE, O_RDWR | O_CREAT, 0644);
+open(LOG_FILE, O_RDWR | O_CREAT, 0644);
+```
+
+### 修复思路
+- 改为 `dup2` 显式绑定 0/1/2。
+- 日志文件使用 `O_WRONLY | O_CREAT | O_APPEND`。
+- 日志路径不可用时兜底到 `/tmp/gateway.log`。
+
+### 实际改动
+- `src/daemon/daemon_runner.c`
+  - 新增 `redirect_stdio()`
+  - 全量替换原始重定向逻辑
+
+### 我的看法
+守护进程标准流重定向如果做错，后续任何故障都“看不见”，这是运维高危点。
+
+---
+
+## 13. 子进程程序路径硬编码，部署路径变化即失效
+
+### 问题说明
+原来 `PROGRAM_NAME` 固定为 `/home/root/gateway/gateway`，一旦部署路径变化直接失败。
+
+### 修复思路
+- 去宏硬编码，改为配置驱动。
+- 子进程结构体保存 `program_path`，启动时使用该路径执行。
+
+### 实际改动
+- `include/daemon_process.h`
+  - 删除 `PROGRAM_NAME` 宏
+  - `SubProcess` 增加 `program_path`
+  - `daemon_process_init()` 新增 `program_path` 参数
+- `src/daemon/daemon_process.c`
+  - 启动改为 `execv(subprocess->program_path, subprocess->args)`
+- `config/daemon.ini`
+  - 新增 `program_path` 配置项
+
+### 我的看法
+路径硬编码属于“环境耦合”问题，短期省事，长期是部署隐患。
+
+---
+
+## 14. `__environ` 可移植性差
+
+### 问题说明
+原代码使用 `execve(..., __environ)`，该符号在部分工具链不可用。
+
+### 修复思路
+- 使用 `execv()` 继承当前进程环境，去除对 `__environ` 的依赖。
+
+### 实际改动
+- `src/daemon/daemon_process.c`
+  - `execve` -> `execv`
+
+### 我的看法
+守护进程这类基础组件应尽量避免非标准符号依赖，减少跨平台/交叉编译问题。
+
+---
+
+## 15. 子进程回收边界处理不足（`ESRCH/ECHILD`）
+
+### 问题说明
+停止子进程时，如果目标已退出或已被回收，原逻辑会报错返回，造成误告警。
+
+### 修复思路
+- `kill` 遇到 `ESRCH` 视为“进程已结束”。
+- `waitpid` 遇到 `ECHILD` 视为“已被回收”。
+
+### 实际改动
+- `src/daemon/daemon_process.c`
+  - `daemon_process_stop()` 增加 `ESRCH/ECHILD` 特判
+
+### 我的看法
+停止流程应优先保证幂等，不应把“已经结束”当成错误。
+
+---
+
+## 16. 缺少守护进程专用配置文件
+
+### 问题说明
+守护参数（日志路径、重启阈值、退避策略）散落在代码里，不能按现场环境调优。
+
+### 修复思路
+- 增加独立配置模块与配置文件，统一守护参数入口。
+
+### 实际改动
+- 新增 `include/daemon_config.h`
+- 新增 `src/daemon/daemon_config.c`
+- 新增 `config/daemon.ini`
+- `src/daemon/daemon_runner.c` 接入 `daemon_config_load()`
+- `Makefile` 增加 `src/daemon/daemon_config.c` 编译项
+
+### 我的看法
+守护进程属于部署敏感模块，参数配置化是必须项，不应该靠重编译调参数。
+
+---
+
+## 本次新增/修改文件（守护进程专项）
+
+- `include/daemon_config.h`
+- `include/daemon_process.h`
+- `include/daemon_runner.h`
+- `src/daemon/daemon_config.c`
+- `src/daemon/daemon_process.c`
+- `src/daemon/daemon_runner.c`
+- `config/daemon.ini`
+- `Makefile`
+- `README.md`
+- `gateway.md`
+- `Bug.md`

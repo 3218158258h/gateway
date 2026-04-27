@@ -106,6 +106,7 @@
 - `config/transport.ini`：MQTT/DDS 逻辑传输参数。  
 - `config/transport_physical.ini`：物理接口参数扩展位。  
 - `config/protocols.ini`：私有协议定义（帧头/尾、ACK/NACK、init_cmds）。
+- `config/daemon.ini`：守护进程参数（子进程路径、日志路径、崩溃阈值、重启退避）。
 
 设计原则：
 - 总配置负责“启哪些模块、用哪份分层配置”。
@@ -164,4 +165,3 @@
 - `problem.md`：本轮问题与修复细节  
 - `迭代计划.md`：优化清单状态  
 - `count.md`：压测记录模板
-
