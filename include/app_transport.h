@@ -30,6 +30,21 @@ typedef enum {
     TRANSPORT_STATE_ERROR
 } TransportState;
 
+/* 传输健康诊断信息，用于排查连接/发布异常。 */
+typedef struct TransportHealth {
+    uint64_t state_changes;
+    uint64_t connect_attempts;
+    uint64_t connect_failures;
+    uint64_t disconnects;
+    uint64_t publish_attempts;
+    uint64_t publish_failures;
+    uint64_t subscribe_attempts;
+    uint64_t subscribe_failures;
+    uint64_t last_state_change_ms;
+    int last_error_code;
+    char last_error_stage[64];
+} TransportHealth;
+
 /* 传输配置 */
 typedef struct TransportConfig {
     TransportType type;
@@ -61,6 +76,7 @@ typedef struct TransportManager {
     void *mqtt_client;
     void *dds_manager;
     int is_initialized;
+    TransportHealth health;
     
     /* 回调 */
     void (*on_message)(struct TransportManager *manager, const char *topic,
@@ -241,5 +257,19 @@ const char *transport_get_publish_topic(TransportManager *manager);
  * @return 订阅话题名称
  */
 const char *transport_get_subscribe_topic(TransportManager *manager);
+
+/**
+ * @brief 获取传输健康状态快照
+ * @param manager 管理器
+ * @param health 输出健康状态
+ */
+void transport_get_health(const TransportManager *manager, TransportHealth *health);
+
+/**
+ * @brief 输出结构化传输健康日志
+ * @param manager 管理器
+ * @param tag 日志标签（可选）
+ */
+void transport_log_health(const TransportManager *manager, const char *tag);
 
 #endif /* __APP_TRANSPORT_H__ */

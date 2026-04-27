@@ -18,6 +18,7 @@ typedef enum
 } DeviceState;
 
 struct VTable;
+typedef int (*DeviceRecvCallback)(void *context, void *ptr, int len);
 
 typedef struct DeviceStruct
 {
@@ -39,7 +40,8 @@ struct VTable
     Task send_task;                                        /* 发送任务。 */
     int (*post_read)(Device *device, void *ptr, int *len); /* 读后处理：把原始字节转成协议数据。 */
     int (*pre_write)(Device *device, void *ptr, int *len); /* 写前处理：把业务数据转成设备命令。 */
-    int (*recv_callback)(void *ptr, int len);              /* 接收回调。 */
+    DeviceRecvCallback recv_callback;                      /* 接收回调。 */
+    void *recv_callback_ctx;                               /* 接收回调上下文。 */
 };
 
 int app_device_init(Device *device, char *filename);
@@ -68,7 +70,7 @@ int app_device_start(Device *device);
 int app_device_write(Device *device, void *ptr, int len);
 
 /* 注册设备接收回调，给上层转发拆帧后的消息。 */
-void app_device_registerRecvCallback(Device *device, int (*recv_callback)(void *, int));
+void app_device_registerRecvCallback(Device *device, DeviceRecvCallback recv_callback, void *context);
 
 /**
  * @brief 停止设备后台线程

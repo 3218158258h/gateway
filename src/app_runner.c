@@ -39,11 +39,45 @@ typedef struct RuntimeConfig {
     int thread_pool_executors;
 } RuntimeConfig;
 
+typedef struct ActiveDeviceConfig {
+    char path[MAX_DEVICE_PATH_LEN];
+    char interface_name[APP_INTERFACE_NAME_MAX_LEN];
+    char protocol_name[APP_PROTOCOL_NAME_MAX_LEN];
+} ActiveDeviceConfig;
+
 /* 全局静态变量。 */
 static SerialDevice devices[MAX_SERIAL_DEVICES];      /* 串口设备实例数组。 */
 static RouterManager router;                          /* 路由管理器实例。 */
 static PersistenceManager persistence;                /* 消息持久化管理器实例。 */
 static volatile sig_atomic_t stop_requested = 0;      /* 停止请求标志（原子变量）。 */
+
+static void log_startup_snapshot(const RuntimeConfig *runtime,
+                                 int configured_device_count,
+                                 int device_buffer_size,
+                                 const PersistenceConfig *persist_config)
+{
+    if (!runtime || !persist_config) {
+        return;
+    }
+    log_info("[snapshot] event=startup_config thread_pool_executors=%d configured_device_count=%d "
+             "device_buffer_size=%d persistence_db=%s persistence_queue_size=%d persistence_retry=%d",
+             runtime->thread_pool_executors,
+             configured_device_count,
+             device_buffer_size,
+             persist_config->db_path,
+             persist_config->max_queue_size,
+             persist_config->max_retry_count);
+}
+
+static void log_device_snapshot(int index, const char *path,
+                                const char *interface_name, const char *protocol_name)
+{
+    log_info("[snapshot] event=device_config index=%d path=%s interface=%s protocol=%s",
+             index,
+             path ? path : "",
+             interface_name ? interface_name : "",
+             protocol_name ? protocol_name : "");
+}
 
 /* 去除字符串首尾空白字符。 */
 static char *trim_whitespace(char *str)
@@ -419,42 +453,51 @@ int app_runner_run()
         }
     }
 
-    log_info("Startup summary: configured_device_count=%d, device_buffer_size=%d, persistence_queue_size=%d",
-             configured_device_count,
-             device_buffer_size,
-             persist_config.max_queue_size);
-
-    int initialized_device_count = 0;
+    log_startup_snapshot(&runtime_config, configured_device_count, device_buffer_size, &persist_config);
     for (int i = 0; i < configured_device_count; i++) {
-        if (app_device_layer_init(&devices[i], device_paths[i], device_interfaces[i]) != 0) {
-            log_error("Failed to init serial device: %s", device_paths[i]);
-            for (int j = 0; j < initialized_device_count; j++) {
-                app_device_layer_close((Device *)&devices[j]);
-            }
-            if (persistence.is_initialized) {
-                persistence_close(&persistence);
-            }
-            app_task_close();
-            config_destroy(&gateway_cfg);
-            return -1;
+        log_device_snapshot(i, device_paths[i], device_interfaces[i], device_protocols[i]);
+    }
+
+    ActiveDeviceConfig active_configs[MAX_SERIAL_DEVICES] = {0};
+    int initialized_device_count = 0;
+    int failed_device_count = 0;
+    for (int i = 0; i < configured_device_count; i++) {
+        SerialDevice *target = &devices[initialized_device_count];
+        if (app_device_layer_init(target, device_paths[i], device_interfaces[i]) != 0) {
+            failed_device_count++;
+            log_warn("[device] event=init_failed index=%d path=%s interface=%s protocol=%s",
+                     i, device_paths[i], device_interfaces[i], device_protocols[i]);
+            continue;
         }
 
-        if (app_device_layer_configure(&devices[i], device_protocols[i]) != 0) {
-            log_error("Failed to apply protocol '%s' on device: %s",
-                      device_protocols[i], device_paths[i]);
-            app_device_layer_close((Device *)&devices[i]);
-            for (int j = 0; j < initialized_device_count; j++) {
-                app_device_layer_close((Device *)&devices[j]);
-            }
-            if (persistence.is_initialized) {
-                persistence_close(&persistence);
-            }
-            app_task_close();
-            config_destroy(&gateway_cfg);
-            return -1;
+        if (app_device_layer_configure(target, device_protocols[i]) != 0) {
+            failed_device_count++;
+            log_warn("[device] event=protocol_apply_failed index=%d path=%s interface=%s protocol=%s",
+                     i, device_paths[i], device_interfaces[i], device_protocols[i]);
+            app_device_layer_close((Device *)target);
+            continue;
         }
 
+        snprintf(active_configs[initialized_device_count].path,
+                 sizeof(active_configs[initialized_device_count].path), "%s", device_paths[i]);
+        snprintf(active_configs[initialized_device_count].interface_name,
+                 sizeof(active_configs[initialized_device_count].interface_name), "%s", device_interfaces[i]);
+        snprintf(active_configs[initialized_device_count].protocol_name,
+                 sizeof(active_configs[initialized_device_count].protocol_name), "%s", device_protocols[i]);
         initialized_device_count++;
+    }
+
+    log_info("[device] event=bootstrap_summary configured=%d initialized=%d failed=%d",
+             configured_device_count, initialized_device_count, failed_device_count);
+    if (initialized_device_count <= 0) {
+        log_error("[device] event=no_available_device configured=%d failed=%d",
+                  configured_device_count, failed_device_count);
+        if (persistence.is_initialized) {
+            persistence_close(&persistence);
+        }
+        app_task_close();
+        config_destroy(&gateway_cfg);
+        return -1;
     }
 
     // 初始化路由管理器
@@ -469,6 +512,7 @@ int app_runner_run()
         app_task_close();
         return -1;
     }
+    transport_log_health(&router.transport, "router_init");
 
     // 注册串口设备到路由管理器
     for (int i = 0; i < initialized_device_count; i++) {
@@ -484,6 +528,11 @@ int app_runner_run()
             config_destroy(&gateway_cfg);
             return -1;
         }
+        log_info("[device] event=registered index=%d path=%s interface=%s protocol=%s",
+                 i,
+                 active_configs[i].path,
+                 active_configs[i].interface_name,
+                 active_configs[i].protocol_name);
     }
 
     // 注册消息回调函数
@@ -494,6 +543,7 @@ int app_runner_run()
 
     // 启动路由管理器（连接云端、启动设备）
     if (app_router_start(&router) != 0) {
+        transport_log_health(&router.transport, "router_start_failed");
         app_task_close();
         app_router_close(&router);
         if (persistence.is_initialized) {
@@ -507,6 +557,7 @@ int app_runner_run()
     app_task_wait();
 
     // 停止路由管理器
+    transport_log_health(&router.transport, "before_stop");
     app_router_stop(&router);
 
     // 清理已发送的消息
@@ -517,6 +568,7 @@ int app_runner_run()
 
     // 先关闭线程池，确保不会再有设备回调访问路由状态
     app_task_close();
+    transport_log_health(&router.transport, "before_close");
     app_router_close(&router);
     config_destroy(&gateway_cfg);
 

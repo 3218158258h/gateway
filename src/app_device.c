@@ -247,7 +247,8 @@ static void app_device_defaultRecvTask(void *argv)
         // Invoke receive callback (with retry).
         if (device->vptr && device->vptr->recv_callback) {
             int retry = 0;
-            while (device->vptr->recv_callback(buf, buf_len) < 0 && retry < 3)
+            while (device->vptr->recv_callback(device->vptr->recv_callback_ctx, buf, buf_len) < 0 &&
+                   retry < 3)
             {
                 usleep(100000);  // 回调失败，等待100ms后重试
                 retry++;
@@ -424,6 +425,7 @@ int app_device_init(Device *device, char *filename)
     device->vptr->pre_write = NULL;    // 写前处理（由子类实现）
     device->vptr->post_read = NULL;    // 读后处理（由子类实现）
     device->vptr->recv_callback = NULL; // 接收回调（由上层注册）
+    device->vptr->recv_callback_ctx = NULL; // 回调上下文
 
     log_info("Device %s initialized (buffer_size=%d)", device->filename, g_device_buffer_len);
 
@@ -518,10 +520,11 @@ int app_device_write(Device *device, void *ptr, int len)
  * @param device 设备结构体指针
  * @param recv_callback 回调函数指针
  */
-void app_device_registerRecvCallback(Device *device, int (*recv_callback)(void *, int))
+void app_device_registerRecvCallback(Device *device, DeviceRecvCallback recv_callback, void *context)
 {
     if (device && device->vptr) {
         device->vptr->recv_callback = recv_callback;
+        device->vptr->recv_callback_ctx = context;
     }
 }
 

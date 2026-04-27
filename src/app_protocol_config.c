@@ -82,6 +82,55 @@ static void app_protocol_load_defaults(BluetoothProtocolConfig *config)
     config->init_cmds_count = 4;
 }
 
+static int app_protocol_validate(const char *section,
+                                 const BluetoothProtocolConfig *config,
+                                 char *reason, size_t reason_len)
+{
+    if (!config) {
+        snprintf(reason, reason_len, "%s", "config is null");
+        return -1;
+    }
+    if (config->connection_type == CONNECTION_TYPE_NONE) {
+        snprintf(reason, reason_len, "%s.connection_type=none is not allowed", section);
+        return -1;
+    }
+    if (config->frame_header_len <= 0 || config->frame_header_len > APP_PROTOCOL_MAX_FRAME_BYTES) {
+        snprintf(reason, reason_len, "%s.frame_header_len=%d out of range",
+                 section, config->frame_header_len);
+        return -1;
+    }
+    if (config->frame_tail_len < 0 || config->frame_tail_len > APP_PROTOCOL_MAX_FRAME_BYTES) {
+        snprintf(reason, reason_len, "%s.frame_tail_len=%d out of range",
+                 section, config->frame_tail_len);
+        return -1;
+    }
+    if (config->id_len <= 0 || config->id_len > 8) {
+        snprintf(reason, reason_len, "%s.id_len=%d out of range(1..8)",
+                 section, config->id_len);
+        return -1;
+    }
+    if (config->mesh_cmd_prefix[0] == '\0') {
+        snprintf(reason, reason_len, "%s.mesh_cmd_prefix is empty", section);
+        return -1;
+    }
+    if (config->ack_frame_len < 0 || config->ack_frame_len > APP_PROTOCOL_MAX_FRAME_BYTES) {
+        snprintf(reason, reason_len, "%s.ack_frame_len=%d out of range",
+                 section, config->ack_frame_len);
+        return -1;
+    }
+    if (config->nack_frame_len < 0 || config->nack_frame_len > APP_PROTOCOL_MAX_FRAME_BYTES) {
+        snprintf(reason, reason_len, "%s.nack_frame_len=%d out of range",
+                 section, config->nack_frame_len);
+        return -1;
+    }
+    if (config->init_cmds_count < 0 || config->init_cmds_count > APP_PROTOCOL_MAX_INIT_CMDS) {
+        snprintf(reason, reason_len, "%s.init_cmds_count=%d out of range",
+                 section, config->init_cmds_count);
+        return -1;
+    }
+    return 0;
+}
+
 /**
  * @brief 从协议配置文件加载蓝牙/无线设备协议参数
  *
@@ -110,17 +159,33 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
     app_protocol_load_defaults(config);
 
     const char *resolved_name = protocol_name && protocol_name[0] ? protocol_name : DEFAULT_PROTOCOL_NAME;
+    int strict_mode = protocol_name && protocol_name[0] &&
+                      strcasecmp(resolved_name, DEFAULT_PROTOCOL_NAME) != 0;
     char section[CONFIG_MAX_SECTION_LEN] = {0};
     snprintf(section, sizeof(section), "protocol.%s", resolved_name);
 
     ConfigManager cfg_mgr = {0};
     if (config_init(&cfg_mgr, APP_PROTOCOL_CONFIG_FILE) != 0 || config_load(&cfg_mgr) != 0) {
+        if (strict_mode) {
+            log_error("Protocol config load failed (%s), strict mode reject protocol=%s",
+                      APP_PROTOCOL_CONFIG_FILE, resolved_name);
+            return -1;
+        }
         log_warn("Protocol config load failed (%s), using defaults for %s",
                  APP_PROTOCOL_CONFIG_FILE, resolved_name);
         return 0;
     }
 
     char value[CONFIG_MAX_VALUE_LEN] = {0};
+    int parse_errors = 0;
+    if (config_get_string(&cfg_mgr, section, "connection_type", NULL, value, sizeof(value)) != 0 ||
+        value[0] == '\0') {
+        if (strict_mode) {
+            log_error("Missing required protocol section/key: [%s].connection_type", section);
+            config_destroy(&cfg_mgr);
+            return -1;
+        }
+    }
 
     /* 解析 connection_type */
     if (config_get_string(&cfg_mgr, section, "connection_type", "", value, sizeof(value)) == 0 &&
@@ -130,6 +195,7 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
             config->connection_type = connection_type;
         } else {
             log_warn("Invalid %s.connection_type=%s, fallback default", section, value);
+            parse_errors++;
         }
     }
 
@@ -142,6 +208,7 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
             config->frame_header_len = frame_header_len;
         } else {
             log_warn("Invalid %s.frame_header=%s, fallback default", section, value);
+            parse_errors++;
         }
     }
 
@@ -155,6 +222,7 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
         } else {
             log_warn("Invalid %s.frame_tail=%s, ignore", section, value);
             config->frame_tail_len = 0;
+            parse_errors++;
         }
     }
 
@@ -163,6 +231,7 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
     if (config->id_len <= 0 || config->id_len > 8) {
         log_warn("Invalid %s.id_len=%d, fallback default", section, config->id_len);
         config->id_len = 2;
+        parse_errors++;
     }
 
     /* 解析下行指令前缀 */
@@ -190,6 +259,7 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
                 config->ack_frame_len = ack_len;
             } else {
                 log_warn("Invalid %s.ack_frame=%s, fallback default", section, value);
+                parse_errors++;
             }
         }
     }
@@ -204,6 +274,7 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
         } else {
             log_warn("Invalid %s.nack_frame=%s, ignore", section, value);
             config->nack_frame_len = 0;
+            parse_errors++;
         }
     }
 
@@ -213,7 +284,27 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
         int count = app_private_protocol_parse_init_cmds(value, config->init_cmds, APP_PROTOCOL_MAX_INIT_CMDS);
         if (count > 0) {
             config->init_cmds_count = count;
+        } else {
+            parse_errors++;
         }
+    }
+
+    char reason[128] = {0};
+    if (app_protocol_validate(section, config, reason, sizeof(reason)) != 0) {
+        if (strict_mode) {
+            log_error("Protocol validation failed: protocol=%s reason=%s", resolved_name, reason);
+            config_destroy(&cfg_mgr);
+            return -1;
+        }
+        log_warn("Protocol validation fallback to defaults: protocol=%s reason=%s", resolved_name, reason);
+        app_protocol_load_defaults(config);
+    }
+
+    if (strict_mode && parse_errors > 0) {
+        log_error("Protocol parse failed in strict mode: protocol=%s parse_errors=%d",
+                  resolved_name, parse_errors);
+        config_destroy(&cfg_mgr);
+        return -1;
     }
 
     config_destroy(&cfg_mgr);

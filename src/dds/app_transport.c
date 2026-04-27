@@ -17,11 +17,41 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 /* 传输类型字符串数组。 */
 static const char *type_strings[] = {
     "mqtt", "dds", "auto"
 };
+
+static uint64_t transport_now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+static void transport_record_error(TransportManager *manager, const char *stage, int code)
+{
+    if (!manager) {
+        return;
+    }
+    manager->health.last_error_code = code;
+    snprintf(manager->health.last_error_stage, sizeof(manager->health.last_error_stage), "%s",
+             stage ? stage : "unknown");
+}
+
+static void transport_set_state(TransportManager *manager, TransportState state)
+{
+    if (!manager) {
+        return;
+    }
+    if (manager->state != state) {
+        manager->health.state_changes++;
+        manager->health.last_state_change_ms = transport_now_ms();
+    }
+    manager->state = state;
+}
 
 static void transport_fill_default_config(TransportConfig *config)
 {
@@ -232,7 +262,7 @@ static void mqtt_state_callback(MqttClient *client, MqttState state)
         default:                      tstate = TRANSPORT_STATE_DISCONNECTED; break;
     }
     
-    manager->state = tstate;
+    transport_set_state(manager, tstate);
     
     // 触发上层状态变化回调
     if (manager->on_state_changed) {
@@ -282,6 +312,9 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
         transport_fill_default_config(&manager->config);
     }
     
+    memset(&manager->health, 0, sizeof(manager->health));
+    manager->health.last_state_change_ms = transport_now_ms();
+    snprintf(manager->health.last_error_stage, sizeof(manager->health.last_error_stage), "%s", "none");
     manager->state = TRANSPORT_STATE_DISCONNECTED;
     manager->active_type = manager->config.type;
     
@@ -315,6 +348,7 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
     if (manager->config.type == TRANSPORT_TYPE_DDS) {
         if (!dds_is_compiled_enabled()) {
             log_error("DDS transport requested but DDS support is unavailable in current binary");
+            transport_record_error(manager, "dds_init", -1);
             return -1;
         }
         DdsManager *dds = malloc(sizeof(DdsManager));
@@ -407,6 +441,7 @@ void transport_close(TransportManager *manager)
     }
     
     manager->is_initialized = 0;
+    transport_set_state(manager, TRANSPORT_STATE_DISCONNECTED);
     log_info("Transport closed");
 }
 
@@ -421,18 +456,29 @@ void transport_close(TransportManager *manager)
 int transport_connect(TransportManager *manager)
 {
     if (!manager || !manager->is_initialized) return -1;
-    
-    manager->state = TRANSPORT_STATE_CONNECTING;
+
+    manager->health.connect_attempts++;
+    transport_set_state(manager, TRANSPORT_STATE_CONNECTING);
     
     // 根据活动类型执行连接
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
-        return mqtt_start((MqttClient *)manager->mqtt_client);
+        int rc = mqtt_start((MqttClient *)manager->mqtt_client);
+        if (rc != 0) {
+            manager->health.connect_failures++;
+            transport_record_error(manager, "mqtt_start", rc);
+            transport_set_state(manager, TRANSPORT_STATE_ERROR);
+            return -1;
+        }
+        return 0;
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
         // DDS不需要显式连接，直接设置为已连接状态
-        manager->state = TRANSPORT_STATE_CONNECTED;
+        transport_set_state(manager, TRANSPORT_STATE_CONNECTED);
         return 0;
     }
-    
+
+    manager->health.connect_failures++;
+    transport_record_error(manager, "connect", -1);
+    transport_set_state(manager, TRANSPORT_STATE_ERROR);
     return -1;
 }
 
@@ -450,7 +496,8 @@ void transport_disconnect(TransportManager *manager)
         mqtt_stop((MqttClient *)manager->mqtt_client);
     }
     
-    manager->state = TRANSPORT_STATE_DISCONNECTED;
+    manager->health.disconnects++;
+    transport_set_state(manager, TRANSPORT_STATE_DISCONNECTED);
 }
 
 /**
@@ -499,15 +546,31 @@ int transport_publish(TransportManager *manager, const char *topic,
                       const void *data, size_t len)
 {
     if (!manager || !topic || !data) return -1;
-    
+
+    manager->health.publish_attempts++;
+
     // 根据活动类型调用对应发布接口
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
-        return mqtt_publish((MqttClient *)manager->mqtt_client, topic, 
-                           data, len, manager->config.default_qos);
+        int rc = mqtt_publish((MqttClient *)manager->mqtt_client, topic,
+                              data, len, manager->config.default_qos);
+        if (rc != 0) {
+            manager->health.publish_failures++;
+            transport_record_error(manager, "mqtt_publish", rc);
+            return -1;
+        }
+        return 0;
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
-        return dds_publish((DdsManager *)manager->dds_manager, topic, data, len);
+        int rc = dds_publish((DdsManager *)manager->dds_manager, topic, data, len);
+        if (rc != 0) {
+            manager->health.publish_failures++;
+            transport_record_error(manager, "dds_publish", rc);
+            return -1;
+        }
+        return 0;
     }
     
+    manager->health.publish_failures++;
+    transport_record_error(manager, "publish", -1);
     log_error("No active transport");
     return -1;
 }
@@ -537,15 +600,31 @@ int transport_publish_string(TransportManager *manager, const char *topic,
 int transport_subscribe(TransportManager *manager, const char *topic)
 {
     if (!manager || !topic) return -1;
-    
+
+    manager->health.subscribe_attempts++;
+
     // 根据活动类型调用对应订阅接口
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
-        return mqtt_subscribe((MqttClient *)manager->mqtt_client, 
-                             topic, manager->config.default_qos);
+        int rc = mqtt_subscribe((MqttClient *)manager->mqtt_client,
+                                topic, manager->config.default_qos);
+        if (rc != 0) {
+            manager->health.subscribe_failures++;
+            transport_record_error(manager, "mqtt_subscribe", rc);
+            return -1;
+        }
+        return 0;
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
-        return dds_subscribe((DdsManager *)manager->dds_manager, topic);
+        int rc = dds_subscribe((DdsManager *)manager->dds_manager, topic);
+        if (rc != 0) {
+            manager->health.subscribe_failures++;
+            transport_record_error(manager, "dds_subscribe", rc);
+            return -1;
+        }
+        return 0;
     }
-    
+
+    manager->health.subscribe_failures++;
+    transport_record_error(manager, "subscribe", -1);
     return -1;
 }
 
@@ -599,7 +678,12 @@ int transport_switch_type(TransportManager *manager, TransportType type)
     manager->active_type = type;
     
     // 重新连接
-    return transport_connect(manager);
+    int rc = transport_connect(manager);
+    if (rc != 0) {
+        transport_record_error(manager, "switch_connect", rc);
+        return -1;
+    }
+    return 0;
 }
 
 /**
@@ -658,14 +742,23 @@ int transport_subscribe_default(TransportManager *manager)
         const char *topic = manager->config.subscribe_topic;
         if (topic[0]) {
             log_info("MQTT subscribing to command topic: %s", topic);
-            return mqtt_subscribe((MqttClient *)manager->mqtt_client, 
-                                  topic, manager->config.default_qos);
+            return transport_subscribe(manager, topic);
         }
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
         // DDS订阅默认主题
-        return dds_subscribe_default((DdsManager *)manager->dds_manager);
+        int rc = dds_subscribe_default((DdsManager *)manager->dds_manager);
+        manager->health.subscribe_attempts++;
+        if (rc != 0) {
+            manager->health.subscribe_failures++;
+            transport_record_error(manager, "dds_subscribe_default", rc);
+            return -1;
+        }
+        return 0;
     }
     
+    manager->health.subscribe_attempts++;
+    manager->health.subscribe_failures++;
+    transport_record_error(manager, "subscribe_default", -1);
     return -1;
 }
 
@@ -688,14 +781,22 @@ int transport_publish_default(TransportManager *manager,
         // MQTT发布到数据主题
         const char *topic = manager->config.publish_topic[0] ? 
                             manager->config.publish_topic : "gateway/data";
-
-        return mqtt_publish((MqttClient *)manager->mqtt_client, topic, 
-                           data, len, manager->config.default_qos);
+        return transport_publish(manager, topic, data, len);
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
         // DDS发布到默认主题
-        return dds_publish_default((DdsManager *)manager->dds_manager, data, len);
+        int rc = dds_publish_default((DdsManager *)manager->dds_manager, data, len);
+        manager->health.publish_attempts++;
+        if (rc != 0) {
+            manager->health.publish_failures++;
+            transport_record_error(manager, "dds_publish_default", rc);
+            return -1;
+        }
+        return 0;
     }
     
+    manager->health.publish_attempts++;
+    manager->health.publish_failures++;
+    transport_record_error(manager, "publish_default", -1);
     return -1;
 }
 
@@ -737,4 +838,37 @@ const char *transport_get_subscribe_topic(TransportManager *manager)
         return manager->config.dds_subscribe_topic[0] ? 
                manager->config.dds_subscribe_topic : "GatewayCommand";
     }
+}
+
+void transport_get_health(const TransportManager *manager, TransportHealth *health)
+{
+    if (!manager || !health) {
+        return;
+    }
+    memcpy(health, &manager->health, sizeof(*health));
+}
+
+void transport_log_health(const TransportManager *manager, const char *tag)
+{
+    if (!manager) {
+        return;
+    }
+    const char *label = (tag && tag[0]) ? tag : "transport";
+    log_info("[health] tag=%s type=%s state=%d state_changes=%llu connect_attempts=%llu connect_failures=%llu "
+             "disconnects=%llu publish_attempts=%llu publish_failures=%llu subscribe_attempts=%llu "
+             "subscribe_failures=%llu last_error_stage=%s last_error_code=%d last_state_change_ms=%llu",
+             label,
+             transport_type_to_string(manager->active_type),
+             (int)manager->state,
+             (unsigned long long)manager->health.state_changes,
+             (unsigned long long)manager->health.connect_attempts,
+             (unsigned long long)manager->health.connect_failures,
+             (unsigned long long)manager->health.disconnects,
+             (unsigned long long)manager->health.publish_attempts,
+             (unsigned long long)manager->health.publish_failures,
+             (unsigned long long)manager->health.subscribe_attempts,
+             (unsigned long long)manager->health.subscribe_failures,
+             manager->health.last_error_stage,
+             manager->health.last_error_code,
+             (unsigned long long)manager->health.last_state_change_ms);
 }

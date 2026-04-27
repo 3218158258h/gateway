@@ -5,6 +5,14 @@
 - 接收云端下发指令并转发到设备
 - 本地持久化消息到 SQLite
 
+本版本已完成低风险架构优化中的关键项（1/2/4/5/7/9），重点增强：
+- 启动配置快照（`[snapshot]`）
+- 设备部分失败隔离启动（单设备失败不再拖垮全局）
+- 协议严格校验（非默认协议）
+- 传输健康状态诊断（`[health]`）
+- 设备回调去全局化（移除全局 `g_router` 依赖）
+- 结构化日志统一（`event=... key=value`）
+
 ---
 
 ## 1. 构建
@@ -158,6 +166,17 @@ python3 scripts/read_gateway_db.py --db <db_path_from_gateway_ini> --limit 50
 - 不再打印缓冲区读写剩余长度跟踪日志
 - 仅在缓冲区创建失败时打印“第几个创建失败”
 - 高频发布/持久化日志下调到 TRACE，默认 INFO 级别下不会刷屏
+
+### Q3: 为什么某个设备启动失败后网关还能继续运行？
+这是预期行为。当前启动策略为“部分成功可运行”：  
+只要至少有一个设备成功初始化并配置，网关会继续提供服务；失败设备会记录在 `[device]` 日志里。
+
+### Q4: 如何快速定位传输层异常？
+优先看 `[health]` 日志，关注以下字段：
+- `connect_attempts / connect_failures`
+- `publish_attempts / publish_failures`
+- `subscribe_attempts / subscribe_failures`
+- `last_error_stage / last_error_code`
 
 ---
 

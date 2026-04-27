@@ -38,6 +38,7 @@ typedef struct RouterStats {
 typedef struct RouterManager {
     TransportManager transport;     /* 传输管理器 */
     Device *devices[ROUTER_MAX_DEVICES];
+    void *device_callback_ctx[ROUTER_MAX_DEVICES];
     int max_message_size;
     int device_count;
     RouterState state;
