@@ -9,11 +9,11 @@ TYPE_SPEC="ble_mesh"
 print_usage() {
   cat <<'USAGE'
 Usage:
-  ./create_virtual_nodes.sh [COUNT] [BASE_DIR] [MAP_FILE] [--types TYPE1,TYPE2,...]
+  ./scripts/create_virtual_nodes.sh [COUNT] [BASE_DIR] [MAP_FILE] [--types TYPE1,TYPE2,...]
 
 Examples:
-  ./create_virtual_nodes.sh 3 /tmp/gateway-vdev
-  ./create_virtual_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-map.tsv --types ble_mesh,lora
+  ./scripts/create_virtual_nodes.sh 3 /tmp/gateway-vdev
+  ./scripts/create_virtual_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-map.tsv --types ble_mesh,lora
 
 Type aliases:
   none|0, lora|1, ble_mesh|ble|2

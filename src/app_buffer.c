@@ -1,7 +1,7 @@
 /**
  * @file app_buffer.c
- * @brief 环形缓冲区实现 - 线程安全的数据缓冲
- * 
+ * @brief 环形缓冲区实现，提供线程安全的数据缓存
+ *
  * 功能说明：
  * - 环形缓冲区（Circular Buffer）实现
  * - 线程安全（互斥锁保护）
@@ -14,9 +14,7 @@
 #include <stdlib.h>
 #include "../thirdparty/log.c/log.h"
 
-/**
- * @brief 从环形缓冲区指定起点复制数据（支持回绕）
- */
+/* 从环形缓冲区指定起点复制数据（支持回绕）。 */
 static void app_buffer_copy_from_ring(const Buffer *buffer, int start, void *buf, int len)
 {
     unsigned char *out = (unsigned char *)buf;
@@ -47,7 +45,7 @@ int app_buffer_init(Buffer *buffer, int size)
         return -1;
     }
     
-    // 分配缓冲区内存
+    /* 分配缓冲区内存。 */
     buffer->ptr = malloc(size);
     if (!buffer->ptr)
     {
@@ -55,7 +53,7 @@ int app_buffer_init(Buffer *buffer, int size)
         return -1;
     }
 
-    // 初始化互斥锁
+    /* 初始化互斥锁。 */
     if (pthread_mutex_init(&buffer->lock, NULL) != 0) {
         log_warn("Failed to initialize mutex for buffer");
         free(buffer->ptr);
@@ -63,10 +61,10 @@ int app_buffer_init(Buffer *buffer, int size)
         return -1;
     }
     
-    // 初始化缓冲区状态
-    buffer->size = size;    // 缓冲区总大小
-    buffer->start = 0;      // 数据起始位置
-    buffer->len = 0;        // 当前数据长度
+    /* 初始化缓冲区状态。 */
+    buffer->size = size;    /* 缓冲区总大小。 */
+    buffer->start = 0;      /* 数据起始位置。 */
+    buffer->len = 0;        /* 当前数据长度。 */
     
     return 0;
 }
@@ -92,13 +90,13 @@ int app_buffer_read(Buffer *buffer, void *buf, int len)
 
     pthread_mutex_lock(&buffer->lock);
     
-    // 限制读取长度不超过可用数据
+    /* 限制读取长度不超过可用数据。 */
     if (len > buffer->len)
     {
         len = buffer->len;
     }
     
-    // 无数据可读
+    /* 无数据可读。 */
     if (len == 0)
     {
         pthread_mutex_unlock(&buffer->lock);
@@ -108,7 +106,7 @@ int app_buffer_read(Buffer *buffer, void *buf, int len)
     app_buffer_copy_from_ring(buffer, buffer->start, buf, len);
     buffer->start = (buffer->start + len) % buffer->size;
     
-    // 更新数据长度
+    /* 更新数据长度。 */
     buffer->len -= len;
 
     pthread_mutex_unlock(&buffer->lock);

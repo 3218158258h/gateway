@@ -1,3 +1,14 @@
+## 网关架构更新说明（2026-04）
+
+本文件基于当前代码状态补充以下关键变化：
+- 启动阶段增加配置快照日志：`[snapshot]`
+- 设备启动采用“部分失败可运行”策略
+- 协议加载新增严格校验（非默认协议）
+- 传输层新增健康状态与计数：`[health]`
+- 设备回调改为 context 传递，已移除全局 `g_router`
+
+建议把本文件和 `problem.md` 联合阅读，用于理解“为什么这样改”。
+
 ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
 │  设备   │───►│ 后台线程 │───►│ 协议解析 │───►│ 缓冲区  │───►│ 接收任务 │───►│  云端   │
 │ (硬件)  │    │ (读取)  │    │ (转换)  │    │ (缓存)  │    │ (处理)  │    │ (MQTT)  │
@@ -213,9 +224,10 @@ main.c
    ▼
 3. app_router_init()
    │
-   ├── config_init() + config_load()
-   │   - 加载 /etc/gateway/gateway.ini
-   │   - 解析配置项到 ConfigManager.items[]
+    ├── config_init() + config_load()
+    │   - 加载 gateway.ini 总配置清单
+    │   - 再按层读取 config/transport.ini、config/transport_physical.ini、
+    │     gateway.ini、config/transport.ini、config/transport_physical.ini、config/protocols.ini
    │
    ├── transport_init()
    │   ├── mqtt_init()

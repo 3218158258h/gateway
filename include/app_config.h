@@ -1,13 +1,13 @@
 /**
  * @file app_config.h
- * @brief 配置管理系统 - 支持INI格式配置文件解析
- * 
+ * @brief 配置管理系统，负责读取和保存各层配置文件
+ *
  * 功能：
- * - INI格式配置文件解析
+ * - INI 格式配置文件解析
  * - 配置项读取/写入
  * - 参数类型转换
  * - 配置热加载
- * 
+ *
  * @author Gateway Team
  * @version 2.0
  */
@@ -27,8 +27,14 @@
 #define CONFIG_MAX_SECTION_LEN 64
 /* 最大配置文件路径长度 */
 #define CONFIG_MAX_PATH_LEN 256
-/* 默认配置文件路径（仅保留一处硬编码） */
-#define APP_DEFAULT_CONFIG_FILE "gateway.ini"
+/* 顶层配置清单 */
+#define APP_GATEWAY_CONFIG_FILE "gateway.ini"
+/* 向后兼容：旧入口仍指向顶层清单 */
+#define APP_DEFAULT_CONFIG_FILE APP_GATEWAY_CONFIG_FILE
+
+/* 分层配置文件路径 */
+#define APP_TRANSPORT_CONFIG_FILE "config/transport.ini"
+#define APP_PHYSICAL_TRANSPORT_CONFIG_FILE "config/transport_physical.ini"
 
 /* 配置值类型 */
 typedef enum {
@@ -54,20 +60,6 @@ typedef struct ConfigManager {
     int item_count;                          /* 配置项数量 */
     int is_loaded;                           /* 是否已加载 */
 } ConfigManager;
-
-/* ========== 全局配置管理器 ========== */
-
-/**
- * @brief 获取全局配置管理器
- * @return 配置管理器指针
- */
-ConfigManager *config_get_global(void);
-
-/**
- * @brief 设置全局配置管理器
- * @param config 配置管理器指针
- */
-void config_set_global(ConfigManager *config);
 
 /* ========== 初始化与销毁 ========== */
 
@@ -100,13 +92,6 @@ int config_load(ConfigManager *config);
  * @return 0成功, -1失败
  */
 int config_save(ConfigManager *config);
-
-/**
- * @brief 重新加载配置文件(热加载)
- * @param config 配置管理器指针
- * @return 0成功, -1失败
- */
-int config_reload(ConfigManager *config);
 
 /* ========== 配置项读取 ========== */
 
@@ -190,13 +175,5 @@ int config_set_int(ConfigManager *config, const char *section, const char *key,
  */
 int config_set_bool(ConfigManager *config, const char *section, const char *key,
                     int value);
-
-/* ========== 调试功能 ========== */
-
-/**
- * @brief 打印所有配置项(调试用)
- * @param config 配置管理器指针
- */
-void config_print_all(ConfigManager *config);
 
 #endif /* __APP_CONFIG_H__ */

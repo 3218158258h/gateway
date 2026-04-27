@@ -1,13 +1,13 @@
 /**
  * @file app_persistence.h
- * @brief 消息持久化系统 - 基于SQLite的消息队列存储
- * 
+ * @brief 消息持久化系统，基于 SQLite 保存待发送消息
+ *
  * 功能：
  * - 消息队列持久化存储
  * - 断点续传支持
  * - 消息状态管理
  * - 自动清理过期消息
- * 
+ *
  * @author Gateway Team
  * @version 2.0
  */
@@ -65,14 +65,6 @@ typedef struct PersistenceManager {
  * @return 0成功, -1失败
  */
 int persistence_init(PersistenceManager *manager, const PersistenceConfig *config);
-
-/**
- * @brief 使用默认配置初始化
- * @param manager 管理器指针
- * @param db_path 数据库路径
- * @return 0成功, -1失败
- */
-int persistence_init_default(PersistenceManager *manager, const char *db_path);
 
 /**
  * @brief 关闭持久化管理器

@@ -6,52 +6,43 @@
 #include <signal.h>
 #include <string.h>
 
-/**
- * @brief 初始化子进程结构体
- * @param subprocess 子进程结构体指针，用于存储子进程信息
- * @param name 子进程名称（如"app"、"ota"）
- * @return 0-初始化成功，-1-初始化失败（参数无效/内存分配失败）
- * @note 主要完成：参数校验、结构体内存清空、分配参数/名称内存、初始化核心字段
- */
+/* 初始化子进程结构体。 */
 int daemon_process_init(SubProcess *subprocess, const char *name)
 {
-    // 参数合法性校验：子进程结构体指针或名称为空则返回失败
+    /* 参数合法性校验：子进程结构体指针或名称为空则返回失败。 */
     if (!subprocess || !name) return -1;
     
-    // 将子进程结构体内存清零，避免脏数据
+    /* 将子进程结构体内存清零，避免脏数据。 */
     memset(subprocess, 0, sizeof(SubProcess));
     
-    // 为子进程启动参数分配内存（3个字符串指针：程序名、子进程名、NULL结束符）
+    /* 为子进程启动参数分配内存（程序名、子进程名、NULL 结束符）。 */
     subprocess->args = malloc(sizeof(char *) * 3);
     if (subprocess->args == NULL)
     {
         log_error("Failed to allocate memory for subprocess args");
         return -1;
     }
-    // 将参数内存清零，确保结束符位置为NULL
+    /* 将参数内存清零，确保结束符位置为 NULL。 */
     memset(subprocess->args, 0, sizeof(char *) * 3);
     
-    // 为子进程名称分配内存（长度=名称长度+1，存储字符串结束符'\0'）
+    /* 为子进程名称分配内存。 */
     size_t name_len = strlen(name) + 1;
     subprocess->name = malloc(name_len);
     if (subprocess->name == NULL)
     {
         log_error("Failed to allocate memory for subprocess name");
-        // 内存分配失败，释放已分配的参数内存，避免内存泄漏
+        /* 内存分配失败，释放已分配的参数内存，避免内存泄漏。 */
         free(subprocess->args);
         subprocess->args = NULL;
         return -1;
     }
 
-    // 将子进程名称拷贝到分配的内存中
+    /* 将子进程名称拷贝到分配的内存中。 */
     memcpy(subprocess->name, name, name_len);
-    // 初始化PID为-1，表示子进程未运行
+    /* 初始化 PID 为 -1，表示子进程未运行。 */
     subprocess->pid = -1;
 
-    // 构造子进程启动参数：
-    // 参数数组第0项为可执行程序名（全局宏PROGRAM_NAME）
-    // 参数数组第1项为子进程名称（如"app"）
-    // 参数数组第2项为NULL，符合execve函数参数格式要求
+    /* 构造子进程启动参数。 */
     subprocess->args[0] = PROGRAM_NAME;
     subprocess->args[1] = subprocess->name;
     subprocess->args[2] = NULL;

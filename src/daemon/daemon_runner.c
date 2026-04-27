@@ -12,69 +12,60 @@
 #include <time.h>
 #include <errno.h>
 
-// 定义两个子进程结构体，分别管理app和ota进程
+/* 定义两个子进程结构体，分别管理 app 和 ota 进程。 */
 static SubProcess subprocess[2];
-// 守护进程运行状态标记：1-运行中，0-停止
+/* 守护进程运行状态标记：1 表示运行中，0 表示停止。 */
 static int is_running = 1;
-// 子进程崩溃计数，用于监控异常退出频率
+/* 子进程崩溃计数，用于监控异常退出频率。 */
 static int crash_count = 0;
-// 上次崩溃的时间戳，用于重置崩溃计数
+/* 上次崩溃的时间戳，用于重置崩溃计数。 */
 static time_t last_crash_time = 0;
 
-// 崩溃计数重置时间间隔（秒）：5分钟内无崩溃则重置计数
+/* 崩溃计数重置时间间隔（秒）：5 分钟内无崩溃则重置计数。 */
 #define CRASH_COUNT_RESET_INTERVAL 300
 
-/**
- * @brief 信号处理函数：处理进程终止信号（SIGTERM）
- * @param sig 接收到的信号值
- * @note 收到终止信号时，将运行状态置为0，触发守护进程优雅退出
- */
+/* 信号处理函数：收到终止信号时触发守护进程优雅退出。 */
 void daemon_runner_close(int sig)
 {
     (void)sig;
     is_running = 0;
 }
 
-/**
- * @brief 守护进程核心运行函数
- * @return 0-运行成功并正常退出，-1-初始化失败
- * @note 功能：创建守护进程、初始化子进程、监控子进程运行状态、异常重启、崩溃计数
- */
+/* 守护进程核心运行函数。 */
 int daemon_runner_run()
 {
-    // 将当前进程创建为守护进程
-    // 参数说明：0-不改变工作目录，1-不重定向标准输入输出（后续手动处理）
+    /* 将当前进程创建为守护进程。 */
     if (daemon(0, 1) < 0)
     {
-        log_error("daemon error");  // 日志记录守护进程创建失败
-        exit(EXIT_FAILURE);        // 退出进程，返回失败状态
+        log_error("daemon error");  /* 日志记录守护进程创建失败。 */
+        exit(EXIT_FAILURE);         /* 退出进程，返回失败状态。 */
     }
 
-    // 关闭标准输入、标准输出、标准错误（守护进程不需要终端交互）
+    /* 关闭标准输入、标准输出、标准错误。 */
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
 
-    // 重定向标准输入到/dev/null（空设备，读取无数据）
+    /* 重定向标准输入到 /dev/null。 */
     open("/dev/null", O_RDWR);
-    // 重定向标准输出到日志文件（创建/读写，权限644）
+    /* 重定向标准输出到日志文件。 */
     open(LOG_FILE, O_RDWR | O_CREAT, 0644);
-    // 重定向标准错误到日志文件（与标准输出同文件）
+    /* 重定向标准错误到日志文件。 */
     open(LOG_FILE, O_RDWR | O_CREAT, 0644);
 
-    // 初始化第一个子进程（app进程）
+    /* 初始化第一个子进程（app 进程）。 */
     if (daemon_process_init(&subprocess[0], "app") != 0) {
-        log_error("Failed to init app subprocess");  // 日志记录初始化失败
-        return -1;                                   // 返回初始化失败
+        log_error("Failed to init app subprocess");  /* 日志记录初始化失败。 */
+        return -1;                                   /* 返回初始化失败。 */
     }
-    // 初始化第二个子进程（ota进程）
+    /* 初始化第二个子进程（ota 进程）。 */
     if (daemon_process_init(&subprocess[1], "ota") != 0) {
-        log_error("Failed to init ota subprocess");  // 日志记录初始化失败
-        daemon_process_free(&subprocess[0]);         // 释放已初始化的app进程资源
-        return -1;                                   // 返回初始化失败
+        log_error("Failed to init ota subprocess");  /* 日志记录初始化失败。 */
+        daemon_process_free(&subprocess[0]);         /* 释放已初始化的 app 进程资源。 */
+        return -1;                                   /* 返回初始化失败。 */
     }
     
-    // 注册SIGTERM信号处理函数：收到终止信号时触发daemon_runner_close
+    /* 注册 SIGTERM 信号处理函数。 */
     signal(SIGTERM, daemon_runner_close);
     // 启动app子进程
     daemon_process_start(&subprocess[0]);

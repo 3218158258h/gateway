@@ -1,6 +1,6 @@
 /**
  * @file app_device.c
- * @brief 设备抽象层实现 - 通用设备管理框架
+ * @brief 设备抽象层实现，提供通用设备管理框架
  * 
  * 功能说明：
  * - 设备初始化与资源管理
@@ -23,11 +23,63 @@
 #include <time.h>
 #include <errno.h>
 
-/* 设备缓冲区大小（可通过配置覆盖） */
+/* 设备缓冲区大小（可通过配置覆盖）。 */
 #define DEFAULT_BUFFER_LEN 16384
+#define RECV_TASK_BUF_SIZE 1024
 #define FRAME_HEADER_SIZE 3
 #define DEVICE_BUFFER_COUNT 2
+#define MAX_FRAME_PAYLOAD_LEN (RECV_TASK_BUF_SIZE - FRAME_HEADER_SIZE)
+/* 保留一个帧头长度的余量；当缓冲区接近满且帧仍不完整时，丢弃一个字节推动解析前进。 */
+#define RECV_STALLED_MARGIN FRAME_HEADER_SIZE
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
+
+static int app_device_is_valid_connection_type(int connection_type)
+{
+    return connection_type == CONNECTION_TYPE_NONE ||
+           connection_type == CONNECTION_TYPE_LORA ||
+           connection_type == CONNECTION_TYPE_BLE_MESH;
+}
+
+static void app_device_set_state(Device *device, DeviceState state)
+{
+    if (!device) {
+        return;
+    }
+    device->lifecycle_state = state;
+}
+
+DeviceState app_device_get_state(const Device *device)
+{
+    if (!device) {
+        return DEVICE_STATE_UNINITIALIZED;
+    }
+    if (device->lifecycle_state < DEVICE_STATE_UNINITIALIZED ||
+        device->lifecycle_state > DEVICE_STATE_ERROR) {
+        return DEVICE_STATE_ERROR;
+    }
+    return (DeviceState)device->lifecycle_state;
+}
+
+const char *app_device_state_to_string(DeviceState state)
+{
+    switch (state) {
+    case DEVICE_STATE_INITIALIZED:
+        return "initialized";
+    case DEVICE_STATE_CONFIGURING:
+        return "configuring";
+    case DEVICE_STATE_CONFIGURED:
+        return "configured";
+    case DEVICE_STATE_RUNNING:
+        return "running";
+    case DEVICE_STATE_STOPPED:
+        return "stopped";
+    case DEVICE_STATE_ERROR:
+        return "error";
+    case DEVICE_STATE_UNINITIALIZED:
+    default:
+        return "uninitialized";
+    }
+}
 
 /**
  * @brief 关闭设备文件描述符并重置为-1
@@ -79,7 +131,7 @@ int app_device_get_buffer_size(void)
  */
 static void *app_device_backgroundTask(void *argv)
 {
-    unsigned char buf[1024];
+    unsigned char buf[RECV_TASK_BUF_SIZE];
     Device *device = argv;
     
     while (device->is_running)
@@ -127,47 +179,83 @@ static void *app_device_backgroundTask(void *argv)
  */
 static void app_device_defaultRecvTask(void *argv)
 {
-    unsigned char buf[1024];
+    unsigned char buf[RECV_TASK_BUF_SIZE];
+    unsigned char header[FRAME_HEADER_SIZE];
     Device *device = argv;
-    
-    // 检查是否有足够数据读取头部
-    if (device->recv_buffer->len < FRAME_HEADER_SIZE) {
+
+    if (!device || !device->recv_buffer) {
         return;
     }
-    
-    // 先peek头部，不移除数据
-    if (app_buffer_peek(device->recv_buffer, buf, FRAME_HEADER_SIZE) < FRAME_HEADER_SIZE) {
-        return;
-    }
-    
-    // 解析消息头
-    int id_len = buf[1];      // 设备标识长度
-    int data_len = buf[2];    // 数据长度
-    int total_len = id_len + data_len;
-    
-    // 检查完整消息是否到达
-    if (device->recv_buffer->len < FRAME_HEADER_SIZE + total_len) {
-        return;  // 数据不完整，等待更多数据
-    }
-    
-    // 读取头部（从缓冲区移除）
-    app_buffer_read(device->recv_buffer, buf, FRAME_HEADER_SIZE);
-    
-    // 读取剩余数据（ID + 数据）
-    app_buffer_read(device->recv_buffer, buf + FRAME_HEADER_SIZE, total_len);
-    
-    int buf_len = FRAME_HEADER_SIZE + total_len;
-    
-    // 调用接收回调函数（带重试机制）
-    if (device->vptr && device->vptr->recv_callback) {
-        int retry = 0;
-        while (device->vptr->recv_callback(buf, buf_len) < 0 && retry < 3)
-        {
-            usleep(100000);  // 回调失败，等待100ms后重试
-            retry++;
+
+    // Method 1: drain all complete frames in this task invocation.
+    while (device->recv_buffer->len >= FRAME_HEADER_SIZE) {
+        // 先peek头部，不移除数据
+        if (app_buffer_peek(device->recv_buffer, header, FRAME_HEADER_SIZE) < FRAME_HEADER_SIZE) {
+            return;
         }
-        if (retry >= 3) {
-            log_error("Callback failed after 3 retries");
+
+        int connection_type = header[0];
+        int id_len = header[1];      // 设备标识长度
+        int data_len = header[2];    // 数据长度
+        int total_len = id_len + data_len;
+
+        // Invalid type: discard one byte to avoid bad header blocking subsequent frames.
+        if (!app_device_is_valid_connection_type(connection_type)) {
+            app_buffer_read(device->recv_buffer, header, 1);
+            log_warn("Discard invalid recv frame type: %d", connection_type);
+            continue;
+        }
+
+        // Invalid length: discard header to avoid dead loop / overflow risk.
+        if (total_len < 0 || total_len > MAX_FRAME_PAYLOAD_LEN) {
+            app_buffer_read(device->recv_buffer, header, FRAME_HEADER_SIZE);
+            log_warn("Discard invalid recv frame length: id_len=%d, data_len=%d", id_len, data_len);
+            continue;
+        }
+
+        int required_len = FRAME_HEADER_SIZE + total_len;
+        // Incomplete frame: wait for more bytes; near-capacity stall triggers one-byte discard.
+        if (device->recv_buffer->len < required_len) {
+            if (device->recv_buffer->size <= RECV_STALLED_MARGIN) {
+                app_buffer_read(device->recv_buffer, header, 1);
+                log_warn("Discard incomplete recv frame due to too-small buffer config: size=%d, need=%d",
+                         device->recv_buffer->size, required_len);
+            } else {
+                int stall_threshold = device->recv_buffer->size - RECV_STALLED_MARGIN;
+                if (device->recv_buffer->len > stall_threshold) {
+                    app_buffer_read(device->recv_buffer, header, 1);
+                    log_warn("Discard stalled incomplete recv frame to prevent blocking: buffered=%d, need=%d",
+                             device->recv_buffer->len, required_len);
+                }
+            }
+            return;
+        }
+
+        // Read full frame (header + payload).
+        if (app_buffer_read(device->recv_buffer, buf, FRAME_HEADER_SIZE) != FRAME_HEADER_SIZE) {
+            log_warn("Failed to read recv frame header from buffer");
+            return;
+        }
+        if (total_len > 0 &&
+            app_buffer_read(device->recv_buffer, buf + FRAME_HEADER_SIZE, total_len) != total_len) {
+            log_warn("Failed to read recv frame payload from buffer: expected=%d", total_len);
+            return;
+        }
+
+        int buf_len = FRAME_HEADER_SIZE + total_len;
+
+        // Invoke receive callback (with retry).
+        if (device->vptr && device->vptr->recv_callback) {
+            int retry = 0;
+            while (device->vptr->recv_callback(device->vptr->recv_callback_ctx, buf, buf_len) < 0 &&
+                   retry < 3)
+            {
+                usleep(100000);  // 回调失败，等待100ms后重试
+                retry++;
+            }
+            if (retry >= 3) {
+                log_error("Callback failed after 3 retries");
+            }
         }
     }
 }
@@ -259,6 +347,13 @@ int app_device_init(Device *device, char *filename)
         log_warn("Invalid device or filename");
         return -1;
     }
+
+    device->fd = -1;
+    device->is_running = 0;
+    device->vptr = NULL;
+    device->recv_buffer = NULL;
+    device->send_buffer = NULL;
+    app_device_set_state(device, DEVICE_STATE_UNINITIALIZED);
     
     // 分配文件名内存
     size_t filename_len = strlen(filename) + 1;
@@ -306,6 +401,7 @@ int app_device_init(Device *device, char *filename)
     
     // 初始化连接类型
     device->connection_type = CONNECTION_TYPE_NONE;
+    app_device_set_state(device, DEVICE_STATE_INITIALIZED);
     
     // 初始化接收缓冲区
     if (app_buffer_init(device->recv_buffer, g_device_buffer_len) < 0)
@@ -329,6 +425,7 @@ int app_device_init(Device *device, char *filename)
     device->vptr->pre_write = NULL;    // 写前处理（由子类实现）
     device->vptr->post_read = NULL;    // 读后处理（由子类实现）
     device->vptr->recv_callback = NULL; // 接收回调（由上层注册）
+    device->vptr->recv_callback_ctx = NULL; // 回调上下文
 
     log_info("Device %s initialized (buffer_size=%d)", device->filename, g_device_buffer_len);
 
@@ -370,11 +467,13 @@ int app_device_start(Device *device)
     }
 
     device->is_running = 1;
+    app_device_set_state(device, DEVICE_STATE_RUNNING);
 
     // 创建后台读取线程
     if (pthread_create(&device->background_thread, NULL, device->vptr->background_task, device) != 0)
     {
         device->is_running = 0;
+        app_device_set_state(device, DEVICE_STATE_ERROR);
         log_error("Failed to create background thread");
         return -1;
     }
@@ -400,12 +499,14 @@ int app_device_write(Device *device, void *ptr, int len)
     // 写入发送缓冲区
     if (app_buffer_write(device->send_buffer, ptr, len) < 0)
     {
+        app_device_set_state(device, DEVICE_STATE_ERROR);
         return -1;
     }
     
     // 注册发送任务到线程池
     if (app_task_register(device->vptr->send_task, device) < 0)
     {
+        app_device_set_state(device, DEVICE_STATE_ERROR);
         return -1;
     }
     return 0;
@@ -419,10 +520,11 @@ int app_device_write(Device *device, void *ptr, int len)
  * @param device 设备结构体指针
  * @param recv_callback 回调函数指针
  */
-void app_device_registerRecvCallback(Device *device, int (*recv_callback)(void *, int))
+void app_device_registerRecvCallback(Device *device, DeviceRecvCallback recv_callback, void *context)
 {
     if (device && device->vptr) {
         device->vptr->recv_callback = recv_callback;
+        device->vptr->recv_callback_ctx = context;
     }
 }
 
@@ -441,6 +543,7 @@ void app_device_stop(Device *device)
     if (device->is_running)
     {
         device->is_running = 0;
+        app_device_set_state(device, DEVICE_STATE_STOPPED);
         
         // 关闭文件描述符（会触发read返回）
         app_device_close_fd(device);
@@ -493,4 +596,5 @@ void app_device_close(Device *device)
         free(device->filename);
         device->filename = NULL;
     }
+    app_device_set_state(device, DEVICE_STATE_UNINITIALIZED);
 }

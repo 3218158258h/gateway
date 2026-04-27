@@ -22,21 +22,26 @@ LDFLAGS += -lddsc
 LDFLAGS += -Wl,-rpath,$(DDS_LIB)
 
 # 源文件
-SUBSCRIBER_SRC = subscriber.c
+SUB_DATA_SRC = sub_data.c
+SUB_CMD_SRC = sub_cmd.c
 PUBLISHER_SRC = publisher.c
 GATEWAY_DATA_SRC = $(DDS_SRC_DIR)/GatewayData.c
 
 # 目标
-all: subscriber publisher
+all: sub_data publisher sub_cmd
 
-subscriber: $(SUBSCRIBER_SRC) $(GATEWAY_DATA_SRC)
-	$(CC) $(CFLAGS) -o $@ $(SUBSCRIBER_SRC) $(GATEWAY_DATA_SRC) $(LDFLAGS)
-	@echo "编译完成: subscriber"
+sub_data: $(SUB_DATA_SRC) $(GATEWAY_DATA_SRC)
+	$(CC) $(CFLAGS) -o $@ $(SUB_DATA_SRC) $(GATEWAY_DATA_SRC) $(LDFLAGS)
+	@echo "编译完成: sub_data"
+
+sub_cmd: $(SUB_CMD_SRC) $(GATEWAY_DATA_SRC)
+	$(CC) $(CFLAGS) -o $@ $(SUB_CMD_SRC) $(GATEWAY_DATA_SRC) $(LDFLAGS)
+	@echo "编译完成: sub_cmd"
 
 publisher: $(PUBLISHER_SRC) $(GATEWAY_DATA_SRC)
 	$(CC) $(CFLAGS) -o $@ $(PUBLISHER_SRC) $(GATEWAY_DATA_SRC) $(LDFLAGS)
 	@echo "编译完成: publisher"
 
 clean:
-	rm -f subscriber publisher
+	rm -f sub_data publisher sub_cmd
 .PHONY: all clean help

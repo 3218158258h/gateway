@@ -29,8 +29,12 @@ BASE_SRCS = $(SRC_DIR)/app_config.c \
             $(SRC_DIR)/app_bluetooth.c \
             $(SRC_DIR)/app_buffer.c \
             $(SRC_DIR)/app_device.c \
+            $(SRC_DIR)/app_device_layer.c \
+            $(SRC_DIR)/app_link_adapter.c \
             $(SRC_DIR)/app_message.c \
             $(SRC_DIR)/app_persistence.c \
+            $(SRC_DIR)/app_private_protocol.c \
+            $(SRC_DIR)/app_protocol_config.c \
             $(SRC_DIR)/app_router.c \
             $(SRC_DIR)/app_runner.c \
             $(SRC_DIR)/app_serial.c \
@@ -79,32 +83,18 @@ CFLAGS += -Ithirdparty/cJSON
 CFLAGS += -Ithirdparty/log.c
 CFLAGS += -Ithirdparty/sqlite3
 CFLAGS += -D_GNU_SOURCE
+CFLAGS += -DUSE_CYCLONE_DDS
 
 # 链接库
 LDFLAGS = -lpthread -lpaho-mqtt3c -lcurl -lssl -lcrypto -ldl
 
-# DDS编译选项
-ifdef USE_DDS
-    # DDS安装路径（可通过环境变量或命令行指定）
-	# 如果是标准安装则无需配置
-    # 示例：make USE_DDS=1 DDS_HOME=/opt/cyclonedds
-    DDS_HOME ?= /home/nvidia/cyclonedds/install
-    
-    # 启用DDS宏
-    CFLAGS += -DUSE_CYCLONE_DDS
-    
-    # 头文件路径
-    CFLAGS += -I$(DDS_HOME)/include
-    
-    # 库文件路径
-    LDFLAGS += -L$(DDS_HOME)/lib
-    
-    # 链接DDS库
-    LDFLAGS += -lddsc
-    
-    # 运行时库路径
-    LDFLAGS += -Wl,-rpath,$(DDS_HOME)/lib
-endif
+# DDS编译选项（固定启用）
+# 可按需覆盖：make DDS_HOME=/opt/cyclonedds/install
+DDS_HOME ?= /home/nvidia/cyclonedds/install
+CFLAGS += -I$(DDS_HOME)/include
+LDFLAGS += -L$(DDS_HOME)/lib
+LDFLAGS += -lddsc
+LDFLAGS += -Wl,-rpath,$(DDS_HOME)/lib
 
 # 调试信息
 $(info Building for $(TARGET))
@@ -170,10 +160,12 @@ clean:
 install: $(TARGET_BIN)
 	install -d /usr/local/bin
 	install -d /etc/gateway
+	install -d /etc/gateway/config
 	install -d /var/log
 	install -d /var/lib/gateway
 	install -m 755 $(TARGET_BIN) /usr/local/bin/
 	install -m 644 gateway.ini /etc/gateway/
+	install -m 644 config/*.ini /etc/gateway/config/
 	@echo "Install complete"
 
 # 运行测试
@@ -192,7 +184,7 @@ help:
 	@echo "Options:"
 	@echo "  TARGET=x86   - Build for x86 (default)"
 	@echo "  TARGET=arm   - Build for ARM (cross-compile)"
-	@echo "  USE_DDS=1    - Enable DDS support"
+	@echo "  DDS_HOME=... - Cyclone DDS install path (default: /home/nvidia/cyclonedds/install)"
 	@echo ""
 	@echo "Dependencies (Ubuntu/Debian):"
 	@echo "  sudo apt-get install libpaho-mqtt-dev libsqlite3-dev libcurl4-openssl-dev libssl-dev"

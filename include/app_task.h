@@ -1,7 +1,8 @@
 #if !defined(__APP_TASK_H__)
 #define __APP_TASK_H__
 
-typedef void (*Task)(void *);//声明Task类型
+/* 线程任务函数类型。 */
+typedef void (*Task)(void *);
 
 int app_task_init(int executors);
 
@@ -13,4 +14,4 @@ void app_task_wait();
 
 void app_task_close();
 
-#endif // __APP_TASK_H__
+#endif /* __APP_TASK_H__ */

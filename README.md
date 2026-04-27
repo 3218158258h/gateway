@@ -5,25 +5,31 @@
 - 接收云端下发指令并转发到设备
 - 本地持久化消息到 SQLite
 
+本版本已完成低风险架构优化中的关键项（1/2/4/5/7/9），重点增强：
+- 启动配置快照（`[snapshot]`）
+- 设备部分失败隔离启动（单设备失败不再拖垮全局）
+- 协议严格校验（非默认协议）
+- 传输健康状态诊断（`[health]`）
+- 设备回调去全局化（移除全局 `g_router` 依赖）
+- 结构化日志统一（`event=... key=value`）
+
 ---
 
 ## 1. 构建
 
 仓库根目录：`<project-root>`
 
-### 1.1 普通构建（不启用DDS）
+### 1.1 标准构建（默认启用 DDS）
 ```bash
 cd <project-root>
 make
 ```
 
-### 1.2 启用DDS构建
+如 Cyclone DDS 安装路径不是默认值，可显式指定：
 ```bash
 cd <project-root>
-make USE_DDS=1 DDS_HOME=/path/to/cyclonedds/install
+make DDS_HOME=/path/to/cyclonedds/install
 ```
-
-> 说明：如果配置里使用 `transport.type=dds`，必须用 `USE_DDS=1` 重新构建，否则启动会失败并提示未编译DDS支持。
 
 ---
 
@@ -36,37 +42,30 @@ cd <project-root>
 
 ---
 
-## 3. 配置说明（gateway.ini）
+## 3. 配置说明
 
-配置文件路径：`<project-root>/gateway.ini`
+顶层清单：`<project-root>/gateway.ini`
 
-### 3.1 选择传输类型
-在 `[transport]` 中设置：
-- `type = mqtt`：走 MQTT
-- `type = dds`：走 DDS（要求二进制已开启DDS编译）
-- `type = auto`：自动选择可用配置
+实际配置拆分到：
+- `config/transport.ini`
+- `config/transport_physical.ini`
+- `config/protocols.ini`
+- `gateway.ini`
 
-### 3.2 MQTT 必填项（type=mqtt 时）
-`[mqtt]` 里至少配置：
-- `server`
-- `client_id`
-- `publish_topic`
-- `subscribe_topic`
-- `keepalive`
+### 3.1 传输配置
+在 `config/transport.ini` 中设置 `[transport]` / `[mqtt]` / `[dds]`
+在 `config/transport_physical.ini` 中设置串口/CAN/SPI/I2C 等物理接口参数
 
-### 3.3 DDS 必填项（type=dds 时）
-`[dds]` 里至少配置：
-- `domain_id`
-- `participant_name`
-- `publish_topic`
-- `publish_type`
-- `subscribe_topic`
-- `subscribe_type`
+### 3.2 运行时与路由
+- `gateway.ini` 的 `[runtime]`：线程池等运行时参数
+- `gateway.ini` 的 `[router]`：路由缓冲区参数
 
-### 3.4 设备串口配置
-在 `[device]` 中配置：
-- `serial_devices = /dev/ttyUSB0,/dev/ttyUSB1`
-- `buffer_size = 16384`
+### 3.3 设备与蓝牙
+- `gateway.ini` 的 `[device]`：串口设备列表与设备缓冲区
+- `gateway.ini` 的 `[bluetooth]`：蓝牙模块运行参数（m_addr / net_id / baud_rate）
+
+### 3.4 持久化
+`gateway.ini` 的 `[persistence]` 包含 SQLite 数据库与队列参数
 
 > 多蓝牙模块场景：每个蓝牙模块对应一个串口设备，把所有串口写到 `serial_devices`（逗号分隔）即可并行接入。
 
@@ -77,20 +76,20 @@ cd <project-root>
 ### 4.1 创建虚拟设备节点
 ```bash
 cd <project-root>
-./create_virtual_nodes.sh 3 /tmp/gateway-vdev
+./scripts/create_virtual_nodes.sh 3 /tmp/gateway-vdev
 ```
 
 按设备类型创建（轮询分配）：
 ```bash
-./create_virtual_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-map.tsv --types ble_mesh,lora
+./scripts/create_virtual_nodes.sh 6 /tmp/gateway-vdev /tmp/gateway-vnodes-map.tsv --types ble_mesh,lora
 ```
 
-脚本会输出 `gw` 端口列表，把它写进 `gateway.ini` 的 `[device].serial_devices`。  
+脚本会输出 `gw` 端口列表，把它写进 `gateway.ini` 的 `[device].serial_devices`。
 并生成映射文件（列：`index type_name type_code gw_port sim_port socat_pid`），便于你按类型统计。
 
 ### 4.2 模拟下位机发消息
 ```bash
-python3 <project-root>/simulate_lower_device.py \
+python3 <project-root>/scripts/simulate_lower_device.py \
   --port /tmp/gateway-vdev/sim0 \
   --device-id 0001 \
   --payload 01020304 \
@@ -100,14 +99,14 @@ python3 <project-root>/simulate_lower_device.py \
 
 可选：模拟 AT 指令 ACK
 ```bash
-python3 <project-root>/simulate_lower_device.py \
+python3 <project-root>/scripts/simulate_lower_device.py \
   --port /tmp/gateway-vdev/sim0 \
   --ack-at --count 0
 ```
 
 ### 4.3 监控串口数据
 ```bash
-./monitor_virtual_port.sh /tmp/gateway-vdev/gw0
+./scripts/monitor_virtual_port.sh /tmp/gateway-vdev/gw0
 ```
 
 ### 4.4 DDS 下行命令发布（按设备类型）
@@ -150,9 +149,9 @@ SELECT id, topic, status, retry_count, created_at FROM messages ORDER BY id DESC
 也可以使用项目内置 Python 脚本（使用 Python 内置 sqlite3）：
 ```bash
 cd <project-root>
-python3 read_gateway_db.py
+python3 scripts/read_gateway_db.py
 # 或指定数据库路径
-python3 read_gateway_db.py --db <db_path_from_gateway_ini> --limit 50
+python3 scripts/read_gateway_db.py --db <db_path_from_gateway_ini> --limit 50
 ```
 
 ---
@@ -160,13 +159,24 @@ python3 read_gateway_db.py --db <db_path_from_gateway_ini> --limit 50
 ## 6. 常见问题
 
 ### Q1: `transport.type=dds` 启动失败
-通常是二进制未开启 DDS 编译（未使用 `make USE_DDS=1`）。
+通常是 Cyclone DDS 库路径配置不正确（检查 `DDS_HOME`、`LD_LIBRARY_PATH` 或系统库路径）。
 
 ### Q2: 启动日志太多
 当前已进一步精简高频日志：
 - 不再打印缓冲区读写剩余长度跟踪日志
 - 仅在缓冲区创建失败时打印“第几个创建失败”
 - 高频发布/持久化日志下调到 TRACE，默认 INFO 级别下不会刷屏
+
+### Q3: 为什么某个设备启动失败后网关还能继续运行？
+这是预期行为。当前启动策略为“部分成功可运行”：  
+只要至少有一个设备成功初始化并配置，网关会继续提供服务；失败设备会记录在 `[device]` 日志里。
+
+### Q4: 如何快速定位传输层异常？
+优先看 `[health]` 日志，关注以下字段：
+- `connect_attempts / connect_failures`
+- `publish_attempts / publish_failures`
+- `subscribe_attempts / subscribe_failures`
+- `last_error_stage / last_error_code`
 
 ---
 
@@ -183,9 +193,15 @@ gateway/
 │   ├── dds/
 │   └── mqtt/
 ├── include/
+├── config/
+│   ├── transport.ini
+│   ├── transport_physical.ini
+│   └── protocols.ini
 ├── test/
 ├── gateway.ini
-├── create_virtual_nodes.sh
-├── simulate_lower_device.py
-└── monitor_virtual_port.sh
+├── scripts/
+│   ├── create_virtual_nodes.sh
+│   ├── simulate_lower_device.py
+│   ├── monitor_virtual_port.sh
+│   └── read_gateway_db.py
 ```

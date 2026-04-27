@@ -16,8 +16,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <dlfcn.h>
 
-/* 条件编译：是否启用Cyclone DDS */
+/* 编译期默认启用 Cyclone DDS；未定义时保留桩实现用于兼容测试环境。 */
 #ifdef USE_CYCLONE_DDS
 #include <dds/dds.h>
 #define DDS_ENABLED 1
@@ -521,6 +522,72 @@ static void on_dds_data_available(dds_entity_t reader, void *arg)
         }
     }
 }
+
+typedef dds_listener_t *(*dds_create_listener_fn_t)(void *);
+typedef dds_return_t (*dds_lset_data_available_fn_t)(dds_listener_t *, dds_on_data_available_fn);
+typedef dds_entity_t (*dds_create_reader_fn_t)(dds_entity_t, dds_entity_t, const dds_qos_t *, const dds_listener_t *);
+typedef void (*dds_delete_listener_fn_t)(dds_listener_t *);
+typedef const char *(*dds_strretcode_fn_t)(dds_return_t);
+
+static void *dds_resolve_symbol(const char *name)
+{
+    if (!name || name[0] == '\0') {
+        return NULL;
+    }
+    return dlsym(RTLD_DEFAULT, name);
+}
+
+static int dds_create_reader_compat(DdsManager *manager,
+                                    dds_entity_t subscriber,
+                                    dds_entity_t topic,
+                                    dds_entity_t *out_reader)
+{
+    if (!manager || !out_reader) {
+        return -1;
+    }
+
+    dds_create_reader_fn_t p_create_reader =
+        (dds_create_reader_fn_t)dds_resolve_symbol("dds_create_reader");
+    if (!p_create_reader) {
+        log_error("DDS symbol missing: dds_create_reader");
+        return -1;
+    }
+
+    dds_create_listener_fn_t p_create_listener =
+        (dds_create_listener_fn_t)dds_resolve_symbol("dds_create_listener");
+    dds_lset_data_available_fn_t p_lset_data_available =
+        (dds_lset_data_available_fn_t)dds_resolve_symbol("dds_lset_data_available");
+    dds_delete_listener_fn_t p_delete_listener =
+        (dds_delete_listener_fn_t)dds_resolve_symbol("dds_delete_listener");
+    dds_strretcode_fn_t p_strretcode =
+        (dds_strretcode_fn_t)dds_resolve_symbol("dds_strretcode");
+
+    dds_listener_t *listener = NULL;
+    if (p_create_listener && p_lset_data_available) {
+        listener = p_create_listener(manager);
+        if (listener) {
+            p_lset_data_available(listener, on_dds_data_available);
+        }
+    } else {
+        log_warn("DDS listener symbols missing, fallback to reader without listener callback");
+    }
+
+    dds_entity_t reader = p_create_reader(subscriber, topic, NULL, listener);
+    if (reader < 0) {
+        if (listener && p_delete_listener) {
+            p_delete_listener(listener);
+        }
+        if (p_strretcode) {
+            log_error("Failed to create reader: %s", p_strretcode((dds_return_t)reader));
+        } else {
+            log_error("Failed to create reader, ret=%d", (int)reader);
+        }
+        return -1;
+    }
+
+    *out_reader = reader;
+    return 0;
+}
 #endif
 
 /**
@@ -547,21 +614,10 @@ int dds_subscribe(DdsManager *manager, const char *topic_name)
     
     // 延迟创建读取器
     if (!info->reader) {
-        // 创建监听器并设置数据到达回调
-        dds_listener_t *listener = dds_create_listener(manager);
-        dds_lset_data_available(listener, on_dds_data_available);
-        
-        // 创建读取器，绑定监听器
-        info->reader = dds_create_reader(internal->subscriber, info->topic, NULL, listener);
-        
-        if (info->reader < 0) {
-            dds_delete_listener(listener);
-            log_error("Failed to create reader: %s", dds_strretcode(info->reader));
+        if (dds_create_reader_compat(manager, internal->subscriber, info->topic, &info->reader) != 0) {
             return -1;
         }
-        
-        // 监听器被读取器接管，不需要手动删除
-        log_debug("DDS reader created with listener for: %s", topic_name);
+        log_debug("DDS reader created for: %s", topic_name);
     }
 #endif
     

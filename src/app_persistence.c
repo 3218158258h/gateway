@@ -1,12 +1,12 @@
 /**
  * @file app_persistence.c
- * @brief 消息持久化模块实现 -基于SQLite的消息存储
- * 
+ * @brief 消息持久化模块实现，基于 SQLite 存储待发送消息
+ *
  * 功能说明：
  * - 消息持久化存储（支持离线重发）
- * - 消息状态管理（待发送/发送中/已发送/失败）
+ * - 消息状态管理（待发送 / 发送中 / 已发送 / 失败）
  * - 过期消息自动清理
- * - 支持WAL模式提升并发性能
+ * - 支持 WAL 模式提升并发性能
  */
 
 #include "../include/app_persistence.h"
@@ -25,27 +25,25 @@
 #define PERSISTENCE_DEFAULT_EXPIRE_HOURS 24
 #define PERSISTENCE_DEFAULT_MAX_QUEUE_SIZE 10000
 
-/* 数据库建表SQL语句 */
+/* 数据库建表 SQL 语句。 */
 static const char *SQL_CREATE_TABLE = 
     "CREATE TABLE IF NOT EXISTS messages ("
-    "id INTEGER PRIMARY KEY AUTOINCREMENT,"     // 消息ID（自增主键）
-    "topic TEXT NOT NULL,"                       // 消息主题
-    "payload BLOB NOT NULL,"                     // 消息内容（二进制）
-    "payload_len INTEGER NOT NULL,"              // 消息长度
-    "qos INTEGER DEFAULT 0,"                     // 服务质量级别
-    "status INTEGER DEFAULT 0,"                  // 消息状态
-    "retry_count INTEGER DEFAULT 0,"             // 重试次数
-    "create_time INTEGER NOT NULL,"              // 创建时间
-    "update_time INTEGER NOT NULL"               // 更新时间
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"     /* 消息 ID（自增主键） */
+    "topic TEXT NOT NULL,"                       /* 消息主题 */
+    "payload BLOB NOT NULL,"                     /* 消息内容（二进制） */
+    "payload_len INTEGER NOT NULL,"              /* 消息长度 */
+    "qos INTEGER DEFAULT 0,"                     /* 服务质量级别 */
+    "status INTEGER DEFAULT 0,"                  /* 消息状态 */
+    "retry_count INTEGER DEFAULT 0,"             /* 重试次数 */
+    "create_time INTEGER NOT NULL,"              /* 创建时间 */
+    "update_time INTEGER NOT NULL"               /* 更新时间 */
     ");";
 
-/* 创建索引SQL语句（优化状态查询） */
+/* 创建索引 SQL 语句（优化状态查询）。 */
 static const char *SQL_CREATE_INDEX = 
     "CREATE INDEX IF NOT EXISTS idx_status ON messages(status);";
 
-/**
- * @brief 递归创建目录（mkdir -p）
- */
+/* 递归创建目录（mkdir -p）。 */
 static int ensure_dir_exists(const char *dir_path)
 {
     if (!dir_path || dir_path[0] == '\0') {
@@ -73,9 +71,7 @@ static int ensure_dir_exists(const char *dir_path)
     return 0;
 }
 
-/**
- * @brief 确保数据库父目录存在
- */
+/* 确保数据库父目录存在。 */
 static int ensure_db_parent_dir(const char *db_path)
 {
     if (!db_path || db_path[0] == '\0') {
@@ -102,9 +98,7 @@ static int ensure_db_parent_dir(const char *db_path)
     return ensure_dir_exists(dir_path);
 }
 
-/**
- * @brief 填充持久化默认配置
- */
+/* 填充持久化默认配置。 */
 static void fill_default_persistence_config(PersistenceConfig *config)
 {
     if (!config) {
@@ -184,27 +178,6 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
     
     log_info("Persistence initialized: %s", manager->config.db_path);
     return 0;
-}
-
-/**
- * @brief 使用默认配置初始化持久化管理器
- * 
- * @param manager 持久化管理器指针
- * @param db_path 数据库路径，NULL使用默认路径
- * @return 0成功，-1失败
- */
-int persistence_init_default(PersistenceManager *manager, const char *db_path)
-{
-    PersistenceConfig config = {0};
-    fill_default_persistence_config(&config);
-    
-    // 设置数据库路径
-    if (db_path && db_path[0] != '\0') {
-        strncpy(config.db_path, db_path, sizeof(config.db_path) - 1);
-        config.db_path[sizeof(config.db_path) - 1] = '\0';
-    }
-    
-    return persistence_init(manager, &config);
 }
 
 /**

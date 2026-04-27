@@ -1,4 +1,5 @@
 #include "../include/app_bluetooth.h"
+#include "../include/app_device_layer.h"
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,12 +19,14 @@ typedef struct {
     int device_fd;
     unsigned char read_buffer[READ_BUFFER_SIZE];
     int read_buffer_len;
+    BluetoothProtocolConfig protocol;
 } BluetoothContext;
 
 static BluetoothContext *bt_contexts = NULL;
 static int bt_context_count = 0;
 static int bt_context_capacity = 0;
 
+/* 确保 bt_contexts 数组容量足够容纳下一个上下文，必要时扩容 */
 static int app_bluetooth_ensureContextCapacity(void)
 {
     if (bt_context_count < bt_context_capacity) {
@@ -43,60 +46,13 @@ static int app_bluetooth_ensureContextCapacity(void)
     return 0;
 }
 
-static SerialBaudRate app_bluetooth_resolveBaudRate(int baud_rate)
-{
-    if (baud_rate == 9600) {
-        return SERIAL_BAUD_RATE_9600;
-    }
-    return SERIAL_BAUD_RATE_115200;
-}
-
-static void app_bluetooth_loadRuntimeConfig(char *m_addr, size_t m_addr_len,
-                                            char *net_id, size_t net_id_len,
-                                            SerialBaudRate *work_baud)
-{
-    if (!m_addr || !net_id || !work_baud || m_addr_len < BT_ADDR_STR_LEN + 1 || net_id_len < BT_ADDR_STR_LEN + 1) {
-        return;
-    }
-
-    snprintf(m_addr, m_addr_len, "%s", DEFAULT_BT_MADDR);
-    snprintf(net_id, net_id_len, "%s", DEFAULT_BT_NETID);
-    *work_baud = app_bluetooth_resolveBaudRate(DEFAULT_BT_WORK_BAUD);
-
-    ConfigManager cfg_mgr = {0};
-    if (config_init(&cfg_mgr, APP_DEFAULT_CONFIG_FILE) != 0) {
-        log_warn("Bluetooth config load failed, using defaults");
-        return;
-    }
-    if (config_load(&cfg_mgr) != 0) {
-        log_warn("Bluetooth config load failed, using defaults");
-        config_destroy(&cfg_mgr);
-        return;
-    }
-
-    char value[CONFIG_MAX_VALUE_LEN] = {0};
-    if (config_get_string(&cfg_mgr, "bluetooth", "m_addr", DEFAULT_BT_MADDR, value, sizeof(value)) == 0 &&
-        strlen(value) == BT_ADDR_STR_LEN) {
-        snprintf(m_addr, m_addr_len, "%s", value);
-    }
-    if (config_get_string(&cfg_mgr, "bluetooth", "net_id", DEFAULT_BT_NETID, value, sizeof(value)) == 0 &&
-        strlen(value) == BT_ADDR_STR_LEN) {
-        snprintf(net_id, net_id_len, "%s", value);
-    }
-
-    int baud_rate = config_get_int(&cfg_mgr, "bluetooth", "baud_rate", DEFAULT_BT_WORK_BAUD);
-    if (baud_rate != 9600 && baud_rate != 115200) {
-        log_warn("Invalid [bluetooth].baud_rate=%d, fallback to %d", baud_rate, DEFAULT_BT_WORK_BAUD);
-        baud_rate = DEFAULT_BT_WORK_BAUD;
-    }
-    *work_baud = app_bluetooth_resolveBaudRate(baud_rate);
-
-    config_destroy(&cfg_mgr);
-}
-
-static BluetoothContext* get_or_create_context(int device_fd) {
+/* 按 device_fd 查找或新建运行时上下文（含读缓冲区 + 协议参数），对应设备层"初始化"阶段 */
+static BluetoothContext* get_or_create_context(int device_fd, const BluetoothProtocolConfig *protocol) {
     for (int i = 0; i < bt_context_count; i++) {
         if (bt_contexts[i].device_fd == device_fd) {
+            if (protocol) {
+                bt_contexts[i].protocol = *protocol;
+            }
             return &bt_contexts[i];
         }
     }
@@ -104,12 +60,18 @@ static BluetoothContext* get_or_create_context(int device_fd) {
     if (app_bluetooth_ensureContextCapacity() == 0) {
         bt_contexts[bt_context_count].device_fd = device_fd;
         bt_contexts[bt_context_count].read_buffer_len = 0;
+        if (protocol) {
+            bt_contexts[bt_context_count].protocol = *protocol;
+        } else {
+            memset(&bt_contexts[bt_context_count].protocol, 0, sizeof(BluetoothProtocolConfig));
+        }
         return &bt_contexts[bt_context_count++];
     }
 
     return NULL;
 }
 
+/* 按 device_fd 查找已存在的运行时上下文，不存在则返回 NULL */
 static BluetoothContext* find_context(int device_fd) {
     for (int i = 0; i < bt_context_count; i++) {
         if (bt_contexts[i].device_fd == device_fd) {
@@ -119,8 +81,40 @@ static BluetoothContext* find_context(int device_fd) {
     return NULL;
 }
 
-static const unsigned char fix_header[] = {0xF1, 0xDD};
+void app_bluetooth_clear_context(int device_fd)
+{
+    for (int i = 0; i < bt_context_count; i++) {
+        if (bt_contexts[i].device_fd == device_fd) {
+            if (i < bt_context_count - 1) {
+                memmove(&bt_contexts[i], &bt_contexts[i + 1],
+                        (size_t)(bt_context_count - i - 1) * sizeof(BluetoothContext));
+            }
+            bt_context_count--;
+            if (bt_context_count == 0) {
+                free(bt_contexts);
+                bt_contexts = NULL;
+                bt_context_capacity = 0;
+            }
+            return;
+        }
+    }
+}
 
+int app_bluetooth_set_protocol_config(SerialDevice *serial_device, const PrivateProtocolConfig *protocol)
+{
+    if (!serial_device || !protocol || serial_device->super.fd < 0) {
+        return -1;
+    }
+
+    BluetoothContext *ctx = get_or_create_context(serial_device->super.fd, protocol);
+    if (ctx) {
+        ctx->read_buffer_len = 0;
+        ctx->protocol = *(const BluetoothProtocolConfig *)protocol;
+    }
+    return ctx ? 0 : -1;
+}
+
+/* 从读缓冲区头部丢弃 n 个字节，将剩余数据前移 */
 static void app_bluetooth_ignoreBuffer(BluetoothContext *ctx, int n)
 {
     if (!ctx || n <= 0 || n > ctx->read_buffer_len) return;
@@ -131,23 +125,39 @@ static void app_bluetooth_ignoreBuffer(BluetoothContext *ctx, int n)
     }
 }
 
-static int app_bluetooth_waitACK(SerialDevice *serial_device)
+/* 等待约 200ms 后读取响应，并基于协议定义匹配 ACK / NACK 字节序列。 */
+static int app_bluetooth_waitResponse(SerialDevice *serial_device, const PrivateProtocolConfig *protocol)
 {
-    usleep(200000);
-    unsigned char buf[4];
-    ssize_t len = read(serial_device->super.fd, buf, 4);
-    if (len >= 4 && memcmp(buf, "OK\r\n", 4) == 0)
-    {
+    if (!serial_device || !protocol) {
+        return -1;
+    }
+
+    /* 协议配置未提供 ACK 帧时，视为无需等待应答。 */
+    if (protocol->ack_frame_len <= 0) {
         return 0;
+    }
+
+    usleep(200000);
+    unsigned char buf[READ_BUFFER_SIZE];
+    ssize_t len = read(serial_device->super.fd, buf, sizeof(buf));
+    if (len <= 0) {
+        return -1;
+    }
+
+    if (app_private_protocol_is_ack(protocol, buf, (int)len)) {
+        return 0;
+    }
+    if (app_private_protocol_is_nack(protocol, buf, (int)len)) {
+        return -1;
     }
     return -1;
 }
 
 /**
- * @brief 发送AT命令并等待ACK
+ * @brief 向设备发送一条 AT 指令并等待协议定义的 ACK 应答
  *
- * 这里统一处理write返回值，避免部分写入或写失败被静默忽略，
- * 导致后续ACK等待逻辑误判。
+ * 统一处理 write() 返回值，避免部分写入或写失败被静默忽略导致 ACK 等待逻辑误判。
+ * len 须与 cmd 缓冲区的实际字节数严格一致，包含末尾 \r\n。
  */
 static int bluetooth_send_cmd_expect_ack(SerialDevice *serial_device, const void *cmd, size_t len)
 {
@@ -165,63 +175,35 @@ static int bluetooth_send_cmd_expect_ack(SerialDevice *serial_device, const void
         return -1;
     }
 
-    return app_bluetooth_waitACK(serial_device);
-}
-
-int app_bluetooth_setConnectionType(SerialDevice *serial_device)
-{
-    if (!serial_device) return -1;
-
-    char m_addr[BT_ADDR_STR_LEN + 1] = {0};
-    char net_id[BT_ADDR_STR_LEN + 1] = {0};
-    SerialBaudRate work_baud = SERIAL_BAUD_RATE_115200;
-    app_bluetooth_loadRuntimeConfig(m_addr, sizeof(m_addr), net_id, sizeof(net_id), &work_baud);
-    
-    serial_device->super.connection_type = CONNECTION_TYPE_BLE_MESH;
-    serial_device->super.vptr->post_read = app_bluetooth_postRead;
-    serial_device->super.vptr->pre_write = app_bluetooth_preWrite;
-    
-    get_or_create_context(serial_device->super.fd);
-    
-    app_serial_setBaudRate(serial_device, SERIAL_BAUD_RATE_9600);
-    app_serial_setBlockMode(serial_device, 0);
-    app_serial_flush(serial_device);
-    if (app_bluetooth_status(serial_device) == 0)
-    {
-        if (app_bluetooth_setMAddr(serial_device, m_addr) < 0)
-        {
-            log_error("Bluetooth: set maddr failed");
-            return -1;
-        }
-        if (app_bluetooth_setNetID(serial_device, net_id) < 0)
-        {
-            log_error("Bluetooth: set netid failed");
-            return -1;
-        }
-        if (app_bluetooth_setBaudRate(serial_device, work_baud) < 0)
-        {
-            log_error("Bluetooth: set baudrate failed");
-            return -1;
-        }
-        if (app_bluetooth_reset(serial_device) < 0)
-        {
-            log_error("Bluetooth: reset failed");
-            return -1;
-        }
+    BluetoothContext *ctx = find_context(serial_device->super.fd);
+    if (!ctx) {
+        return -1;
     }
-    app_serial_setBaudRate(serial_device, work_baud);
-    app_serial_setBlockMode(serial_device, 1);
-    sleep(1);
-    app_serial_flush(serial_device);
-    return 0;
+
+    return app_bluetooth_waitResponse(serial_device, &ctx->protocol);
 }
 
+int app_bluetooth_sendCommand(SerialDevice *serial_device, const char *cmd)
+{
+    if (!serial_device || !cmd) {
+        return -1;
+    }
+    return bluetooth_send_cmd_expect_ack(serial_device, cmd, strlen(cmd));
+}
+
+int app_bluetooth_setConnectionType(SerialDevice *serial_device, const char *protocol_name)
+{
+    return app_device_layer_configure(serial_device, protocol_name);
+}
+
+/* 发送 "AT\r\n" 确认模块处于 AT 命令模式，成功返回 0 */
 int app_bluetooth_status(SerialDevice *serial_device)
 {
     if (!serial_device) return -1;
     return bluetooth_send_cmd_expect_ack(serial_device, "AT\r\n", 4);
 }
 
+/* 发送 "AT+BAUDx\r\n" 设置模块工作波特率，baud_rate 为 SerialBaudRate 枚举值（即编码字符）*/
 int app_bluetooth_setBaudRate(SerialDevice *serial_device, SerialBaudRate baud_rate)
 {
     if (!serial_device) return -1;
@@ -230,12 +212,14 @@ int app_bluetooth_setBaudRate(SerialDevice *serial_device, SerialBaudRate baud_r
     return bluetooth_send_cmd_expect_ack(serial_device, buf, 10);
 }
 
+/* 发送 "AT+RESET\r\n" 复位模块，使已配置的参数生效 */
 int app_bluetooth_reset(SerialDevice *serial_device)
 {
     if (!serial_device) return -1;
     return bluetooth_send_cmd_expect_ack(serial_device, "AT+RESET\r\n", 10);
 }
 
+/* 发送 "AT+NETIDxxxx\r\n" 设置模块网络ID，net_id 须为 4字符字符串 */
 int app_bluetooth_setNetID(SerialDevice *serial_device, char *net_id)
 {
     if (!serial_device || !net_id) return -1;
@@ -244,6 +228,7 @@ int app_bluetooth_setNetID(SerialDevice *serial_device, char *net_id)
     return bluetooth_send_cmd_expect_ack(serial_device, buf, 14);
 }
 
+/* 发送 "AT+MADDRxxxx\r\n" 设置模块物理主地址，m_addr 须为 4字符字符串 */
 int app_bluetooth_setMAddr(SerialDevice *serial_device, char *m_addr)
 {
     if (!serial_device || !m_addr) return -1;
@@ -252,6 +237,8 @@ int app_bluetooth_setMAddr(SerialDevice *serial_device, char *m_addr)
     return bluetooth_send_cmd_expect_ack(serial_device, buf, 14);
 }
 
+/* 接收后处理钩子：从串口原始字节流中按协议帧格式（帧头/帧尾/ID长度）拆帧，
+ * 输出标准内部消息格式：[1B连接类型][1B ID长度][1B数据长度][ID][数据] */
 int app_bluetooth_postRead(Device *device, void *ptr, int *len)
 {
     if (!device || !ptr || !len || *len <= 0) {
@@ -261,7 +248,7 @@ int app_bluetooth_postRead(Device *device, void *ptr, int *len)
     
     BluetoothContext *ctx = find_context(device->fd);
     if (!ctx) {
-        ctx = get_or_create_context(device->fd);
+        ctx = get_or_create_context(device->fd, NULL);
         if (!ctx) {
             *len = 0;
             return 0;
@@ -282,80 +269,67 @@ int app_bluetooth_postRead(Device *device, void *ptr, int *len)
     memcpy(ctx->read_buffer + ctx->read_buffer_len, ptr, *len);
     ctx->read_buffer_len += *len;
 
-    if (ctx->read_buffer_len < 4) {
+    if (ctx->protocol.frame_header_len <= 0 || ctx->protocol.id_len <= 0) {
         *len = 0;
         return 0;
     }
 
-    for (int i = 0; i < ctx->read_buffer_len - 3; i++)
-    {
-        if (memcmp(ctx->read_buffer + i, "OK\r\n", 4) == 0) {
-            app_bluetooth_ignoreBuffer(ctx, i + 4);
+    for (int i = 0; i < ctx->read_buffer_len; i++) {
+        int remaining = ctx->read_buffer_len - i;
+
+        if (app_private_protocol_is_ack(&ctx->protocol, ctx->read_buffer + i, remaining)) {
+            app_bluetooth_ignoreBuffer(ctx, i + ctx->protocol.ack_frame_len);
             *len = 0;
             return 0;
         }
-        else if (memcmp(ctx->read_buffer + i, fix_header, BT_FRAME_HEADER_SIZE) == 0) {
-            // 检查是否有足够的字节来组成一个完整的包
-            int remaining_after_header = ctx->read_buffer_len - i;
-    
-            if (remaining_after_header < 3) {
-                *len = 0;
-                return 0;
-            }
-            app_bluetooth_ignoreBuffer(ctx, i);
-            
-            if (ctx->read_buffer_len < 3) {
-                *len = 0;
-                return 0;
-            }
-            
-            int packet_len = ctx->read_buffer[2];
-            
-            if (packet_len > READ_BUFFER_SIZE - 3 || packet_len < BT_PAYLOAD_MIN_LEN) {
-                log_error("Invalid packet length: %d", packet_len);
-                ctx->read_buffer_len = 0;
-                *len = 0;
-                return 0;
-            }
-            
-            if (ctx->read_buffer_len < packet_len + 3) {
+        if (app_private_protocol_is_nack(&ctx->protocol, ctx->read_buffer + i, remaining)) {
+            app_bluetooth_ignoreBuffer(ctx, i + ctx->protocol.nack_frame_len);
+            *len = 0;
+            return 0;
+        }
+
+        int payload_len = 0;
+        int total_len = app_private_protocol_validate_frame(&ctx->protocol,
+                                                            ctx->read_buffer + i, remaining,
+                                                            &payload_len);
+        if (total_len > 0) {
+            int out_len = app_private_protocol_unpack_frame(&ctx->protocol,
+                                                            ctx->read_buffer + i, total_len,
+                                                            device->connection_type,
+                                                            (unsigned char *)ptr, READ_BUFFER_SIZE);
+            if (out_len < 0) {
+                app_bluetooth_ignoreBuffer(ctx, i + 1);
                 *len = 0;
                 return 0;
             }
 
-            int data_len = packet_len - BT_DEVICE_ID_SIZE;
-            int offset = 0;
-            int id_len = BT_DEVICE_ID_SIZE;
-            /* 类型 */
-            memcpy(ptr + offset, &device->connection_type, 1);
-            offset += 1;
-            /* ID长度 */
-            memcpy(ptr + offset, &id_len, 1);
-            offset += 1;
-            /* 数据长度 */
-            memcpy(ptr + offset, &data_len, 1);
-            offset += 1;
-            /* ID (位置: 帧头2 + 长度1 = 3) */
-            int id_offset = BT_FRAME_HEADER_SIZE + BT_LENGTH_FIELD_SIZE;    
-            memcpy(ptr + offset, ctx->read_buffer + id_offset, BT_DEVICE_ID_SIZE);
-            offset += BT_DEVICE_ID_SIZE;
-            /* 数据 (位置: 3 + 2 = 5) */
-            if (data_len > 0) {
-                int data_offset = id_offset + BT_DEVICE_ID_SIZE;
-                memcpy(ptr + offset, ctx->read_buffer + data_offset, data_len);
-                offset += data_len;
-            }
-            
-            *len = offset;
-            app_bluetooth_ignoreBuffer(ctx, BT_FRAME_HEADER_SIZE + BT_LENGTH_FIELD_SIZE + packet_len);
+            *len = out_len;
+            app_bluetooth_ignoreBuffer(ctx, i + total_len);
             return 0;
-        }   
+        }
+
+        if (total_len == 0) {
+            if (i > 0) {
+                app_bluetooth_ignoreBuffer(ctx, i);
+            }
+            *len = 0;
+            return 0;
+        }
+    }
+
+    if (ctx->read_buffer_len > ctx->protocol.frame_header_len) {
+        int keep = ctx->protocol.frame_header_len - 1;
+        if (keep < 0) {
+            keep = 0;
+        }
+        app_bluetooth_ignoreBuffer(ctx, ctx->read_buffer_len - keep);
     }
 
     *len = 0;
     return 0;
 }
 
+/* 发送前处理钩子：将内部消息格式转换为设备私有帧格式（mesh_cmd_prefix + ID + 数据 + \r\n） */
 int app_bluetooth_preWrite(Device *device, void *ptr, int *len)
 {
     if (!device || !ptr || !len || *len < 3) {
@@ -363,33 +337,28 @@ int app_bluetooth_preWrite(Device *device, void *ptr, int *len)
         return 0;
     }
     
-    int temp = 0;
-    unsigned char buf[30];
-    memcpy(&temp, ptr, 1);
-    if (temp != CONNECTION_TYPE_BLE_MESH)
-    {
+    BluetoothContext *ctx = find_context(device->fd);
+    if (!ctx) {
         *len = 0;
         return 0;
     }
 
-    memcpy(&temp, ptr + 1, 1);
-    if (temp != 2)
-    {
+    size_t command_cap = strlen(ctx->protocol.mesh_cmd_prefix) + (size_t)*len + 4;
+    unsigned char *buf = malloc(command_cap);
+    if (!buf) {
         *len = 0;
         return 0;
     }
-    memcpy(buf, "AT+MESH", 8);
-    memcpy(buf + 8, ptr + 3, 2);
 
-    memcpy(&temp, ptr + 2, 1);
-    if (temp > 18) {
-        log_warn("Bluetooth data too large: %d", temp);
+    int built_len = app_private_protocol_build_command(&ctx->protocol, ptr, *len, buf, (int)command_cap);
+    if (built_len < 0) {
+        free(buf);
         *len = 0;
         return 0;
     }
-    memcpy(buf + 10, ptr + 5, temp);
-    memcpy(buf + 10 + temp, "\r\n", 2);
-    *len = temp + 12;
-    memcpy(ptr, buf, *len);
+
+    *len = built_len;
+    memcpy(ptr, buf, (size_t)*len);
+    free(buf);
     return 0;
 }
