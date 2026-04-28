@@ -1,75 +1,5 @@
 # 网关问题修复记录
 
----
-
-## 27. 持久化表字段与上云信封不一致，无法按设备维度追踪离线消息
-
-### 问题说明
-上云链路已切换为统一 Envelope（包含 `device_path/interface/protocol_*`），
-但 SQLite 持久化表仍保留旧字段 `topic`，导致离线消息重发与排障时无法直接定位来源设备与协议上下文。
-此外，现网可能已有旧版 `messages` 表，直接改建表会造成历史数据不可读。
-
-### 问题代码
-- `include/app_persistence.h`
-  - `PersistMessage` 结构仍为：
-    - `id/topic/payload/payload_len/qos/...`
-- `src/app_persistence.c`
-  - 建表 SQL 仍是：
-    - `topic TEXT NOT NULL`
-  - `persistence_save()` 入参仍是：
-    - `const char *topic`
-  - 查询 SQL（`persistence_get_next` / `persistence_get_all_pending`）仍按 `topic` 读取。
-- `src/app_runner.c`
-  - 持久化调用仍写死：
-    - `persistence_save(&persistence, "GatewayData", ...)`
-- `scripts/read_gateway_db.py`
-  - 查询输出仍固定打印 `topic`。
-
-### 修复思路
-- 持久化层改为“消息主键 + 设备/接口/协议元数据 + payload”的结构。
-- 保留自增 `id` 作为稳定主键，不改为 `device_path`：
-  - `id` 负责唯一性与重试状态索引；
-  - `device_path` 负责来源标识与业务排障。
-- 启动时执行一次 schema 检查：
-  - 若检测到旧表（含 `topic` 或缺少新字段），自动迁移到新表并保留原记录 `id/payload/qos/status/...`。
-- 脚本侧兼容新旧表，优先按新字段展示。
-
-### 实际改动
-- `include/app_persistence.h`
-  - `PersistMessage` 新增并替换字段：
-    - `device_path`
-    - `interface_name`
-    - `protocol_family`
-    - `protocol_name`
-  - `persistence_save()` 签名改为传入上述四个元数据字段。
-- `src/app_persistence.c`
-  - 建表 SQL 改为新字段结构，移除 `topic`。
-  - 新增 `idx_device_path` 索引。
-  - 新增迁移逻辑：
-    - `table_has_column()`
-    - `migrate_messages_table()`
-  - `persistence_save()` 改为写入设备与协议信息。
-  - `persistence_get_next()` 与 `persistence_get_all_pending()` 改为读取新字段。
-- `src/app_runner.c`
-  - 持久化回调中从 `Device/SerialDevice` 采集：
-    - `device_path`
-    - `interface_name`
-    - `protocol_name`
-    - `protocol_family`（按接口映射：`serial_private/i2c_reg/spi_cmd/can_raw`）
-  - 调整 `persistence_save()` 调用参数，移除固定 `"GatewayData"`。
-- `scripts/read_gateway_db.py`
-  - 新增 `PRAGMA table_info(messages)` 检测。
-  - 新表输出：
-    - `device_path/interface_name/protocol_family/protocol_name`
-  - 旧表保留回退查询，避免历史库脚本直接报错。
-
-### 验证结果
-- 持久化消息与上云 Envelope 在设备维度字段上对齐。
-- 消息队列可按 `device_path` 快速追踪来源。
-- 旧版数据库在启动时可自动迁移到新结构，避免人工清库。
-
----
-
 ## 1. 启动配置快照缺失（可观测性不足）
 
 ### 问题说明
@@ -102,6 +32,208 @@ log_info("Startup summary: configured_device_count=%d, ...", ...);
 
 ### 我的看法
 配置快照不是“锦上添花”，而是运行系统的最低可观测性基线。尤其多配置文件（`gateway.ini + transport.ini + protocols.ini`）场景，没有快照几乎无法快速定位配置漂移问题。
+
+---
+
+## 31. 注释风格不统一，存在英文注释与关键逻辑说明缺口
+
+### 问题说明
+项目中部分文件仍存在英文注释或注释粒度不一致的情况。
+在多人协作或后续自维护场景下，会增加阅读成本，尤其是设备收发链路、
+配置解析链路和空协议分支等关键逻辑，缺少统一、直观的中文注释规范。
+
+### 问题代码
+- `src/app_device.c`
+  - 默认收发任务中存在多处英文注释（如帧合法性与丢弃策略说明）。
+- `src/main.c`
+  - 缺少文件头注释，分支注释风格不一致。
+- `src/app_device_layer.c`
+  - 空协议分支新增后，语义需要明确注释以避免误解。
+
+### 修复思路
+- 对关键路径优先执行“必要注释补齐”：
+  - 复杂控制流（异常丢弃、重试、状态分支）必须给出中文说明。
+  - 入口文件补文件级注释，分支注释统一风格。
+- 保持“少而准”的原则，不做逐行噪声注释。
+
+### 实际改动
+- `src/app_device.c`
+  - 将默认接收任务中的英文注释替换为中文，明确：
+    - 帧消费策略
+    - 非法类型/长度处理
+    - 不完整帧与缓冲区拥塞处理
+    - 回调重试语义
+- `src/main.c`
+  - 新增文件头注释。
+  - 统一主命令分发分支注释表达。
+  - 补充帮助文本保留英文的原因说明。
+- `src/app_device_layer.c`
+  - 在空协议分支补充中文注释，明确“跳过私有协议初始化”的行为边界。
+
+### 验证结果
+- 核心执行链路注释已统一为中文，复杂分支可读性提升。
+- 入口与关键逻辑说明更加清晰，便于后续迭代维护。
+
+---
+
+## 30. device_registry 的协议列表空项会错位，且无法表达“该设备无私有协议”
+
+### 问题说明
+用户希望在 `device_registry.protocols` 中通过空项表示“该设备暂不启用私有协议”，
+例如前几个串口有协议、后几个 SPI/I2C/CAN 先留空。
+
+原实现使用 `strtok_r` 并跳过空 token，会把后续协议左移，导致按索引错位；
+同时未填协议会回落默认协议，无法表达“显式无协议”。
+
+### 问题代码
+- `src/app_runner.c`
+  - `parse_string_list()` 仅统计非空项，空项被丢弃。
+  - `load_device_registry_from_physical_config()` 初始化 `out_protocols` 为默认协议，
+    导致空项最终仍会套用默认协议。
+- `src/app_device_layer.c`
+  - `app_device_layer_apply_protocol()` 对空协议名没有明确分支，无法做“跳过协议”。
+
+### 修复思路
+- 解析器改为“按索引对齐”并保留空项，空项只占位不左移。
+- `device_registry` 路径下协议默认值改为空字符串，避免隐式套默认协议。
+- 设备层增加“空协议显式跳过”分支：设备进入 `CONFIGURED`，但不加载私有协议。
+- 日志把空协议显示为 `none`，便于排障。
+
+### 实际改动
+- `src/app_runner.c`
+  - 新增 `parse_aligned_string_list()`，按索引保留空项。
+  - `device_registry` 读取时：
+    - `interfaces`/`protocols` 使用对齐解析；
+    - 协议默认值改为空字符串；
+    - 增加空项数量日志。
+  - 快照与注册日志中，空协议统一显示为 `none`。
+- `src/app_device_layer.c`
+  - `app_device_layer_apply_protocol()` 新增空协议分支：
+    - `connection_type=CONNECTION_TYPE_NONE`
+    - `protocol_name=""`
+    - 串口场景清空 `post_read/pre_write`
+    - 状态置为 `DEVICE_STATE_CONFIGURED`
+- `config/transport_physical.ini`
+  - `device_registry` 注释新增“protocols 空项表示跳过私有协议”说明。
+- `README.md`
+  - 补充 `device_registry.protocols` 空项语义说明。
+
+### 验证结果
+- `protocols` 可用空项按索引占位，不再发生协议错位。
+- 空协议设备可正常完成启动流程，不触发私有协议加载失败。
+
+---
+
+## 29. 蓝牙运行参数分散在 gateway.ini，协议配置不自包含
+
+### 问题说明
+私有协议初始化命令使用占位符 `{m_addr}/{net_id}/{baud_code}`，
+但替换值来自 `gateway.ini [bluetooth]`，导致同一协议定义分散在两处配置：
+- 协议帧规则在 `protocols.ini`
+- 协议关键运行参数在 `gateway.ini`
+
+这种设计会增加配置耦合，迁移协议或复用协议时容易漏配。
+
+### 问题代码
+- `src/app_device_layer.c`
+  - `app_device_layer_load_runtime_config()` 从 `gateway.ini [bluetooth]` 读取
+    `m_addr/net_id/baud_rate`。
+  - `app_device_layer_apply_protocol_serial()` 用上述值替换 `init_cmds` 占位符。
+- `gateway.ini`
+  - 存在 `[bluetooth]` 节，保存协议模板变量。
+- `config/protocols.ini`
+  - 注释声明占位符值来自 `gateway.ini [bluetooth]`。
+
+### 修复思路
+- 将 `m_addr/net_id/work_baud` 下沉到每个协议节，协议配置自包含。
+- 删除设备层对 `gateway.ini [bluetooth]` 的读取逻辑。
+- 串口协议应用阶段直接使用当前协议对象里的参数进行模板替换。
+- 删除 `gateway.ini [bluetooth]` 节，并同步文档说明。
+
+### 实际改动
+- `include/app_private_protocol.h`
+  - `PrivateProtocolConfig` 新增：
+    - `m_addr[5]`
+    - `net_id[5]`
+    - `work_baud`
+- `src/app_private_protocol.c`
+  - 默认协议补充：
+    - `m_addr=0001`
+    - `net_id=1111`
+    - `work_baud=115200`
+- `src/app_protocol_config.c`
+  - 协议默认值与解析逻辑新增 `m_addr/net_id/work_baud`。
+  - 校验新增：
+    - `m_addr/net_id` 长度必须 4
+    - `work_baud` 仅允许 `9600/115200`
+  - 注释改为“占位符替换值来自当前协议节”。
+- `src/app_device_layer.c`
+  - 删除 `app_device_layer_load_runtime_config()` 及其缓存状态。
+  - `app_device_layer_apply_protocol_serial()` 改为使用 `protocol->m_addr/protocol->net_id/protocol->work_baud`。
+- `config/protocols.ini`
+  - 更新注释说明来源。
+  - 在协议节新增：
+    - `m_addr`
+    - `net_id`
+    - `work_baud`
+- `gateway.ini`
+  - 删除 `[bluetooth]` 节。
+- `README.md`、`include/app_bluetooth.h`
+  - 更新相关说明，去除对 `gateway.ini [bluetooth]` 的依赖描述。
+
+### 验证结果
+- 串口私有协议初始化参数由 `protocols.ini` 单点提供。
+- `gateway.ini` 不再承载协议模板变量，配置边界更清晰。
+
+---
+
+## 28. 设备节点清单仍在 gateway.ini，物理配置分层未闭环
+
+### 问题说明
+设备实例清单（节点路径、接口类型、协议名）原先放在 `gateway.ini` 的 `[device]`：
+- `serial_devices`
+- `serial_interfaces`
+- `serial_protocols`
+
+这与“物理链路配置集中在 `config/transport_physical.ini`”的分层目标不一致，
+会导致设备声明与接口参数分散在两份配置，维护和联调容易错位。
+
+### 问题代码
+- `src/app_runner.c`
+  - `load_device_config()` 仅从 `gateway.ini [device]` 读取设备清单。
+- `gateway.ini`
+  - `[device]` 内包含设备路径/接口/协议三组列表。
+- 文档仍引导修改 `gateway.ini [device].serial_devices`。
+
+### 修复思路
+- 把设备实例声明迁移到 `config/transport_physical.ini`，新增统一节：
+  - `[device_registry]`
+  - `device_paths`
+  - `interfaces`
+  - `protocols`
+- `app_runner` 启动时优先读取 `[device_registry]`。
+- 保留旧字段读取作为回退路径，避免已有部署立刻失效。
+- 同步修正文档与注释，统一配置入口说明。
+
+### 实际改动
+- `config/transport_physical.ini`
+  - 新增 `[device_registry]` 设备实例清单。
+- `src/app_runner.c`
+  - 新增 `load_device_registry_from_physical_config()`。
+  - `load_device_config()` 优先从 `physical_transport` 配置读取设备清单。
+  - 旧 `serial_*` 字段保留为兼容回退。
+  - 更新错误日志文案，明确优先项为 `[device_registry].device_paths`。
+- `gateway.ini`
+  - 删除 `serial_devices/serial_interfaces/serial_protocols`，改为迁移注释。
+- 文档/注释更新：
+  - `README.md`
+  - `gateway.md`
+  - `Test.md`
+  - `config/protocols.ini`
+
+### 验证结果
+- 设备节点声明可直接在 `config/transport_physical.ini [device_registry]` 管理。
+- 运行时设备加载链路优先使用物理配置文件，分层职责更清晰。
 
 ---
 
@@ -613,9 +745,6 @@ socat pty,link=spi-gwN ... pty,link=spi-simN ...
   - `README.md`
   - `gateway.md`
 
-### 我的看法
-脚本应优先降低“误用概率”而不是只追求“能跑”。
-这次在保留旧入口的前提下，把“真实联调”和“伪节点联调”显式分离，能显著减少日志误判和排障成本。
 
 ---
 
@@ -689,47 +818,6 @@ socat pty,link=spi-gwN ... pty,link=spi-simN ...
 
 ---
 
-## 24. 调试脚本入口冗余且语义混乱，导致误用成本高
-
-### 问题说明
-旧脚本以 `create_virtual_*` 为主，历史兼容入口较多，难以区分 pseudo 与真实总线调试能力。
-
-### 问题代码
-- `scripts/` 下存在多套入口，语义重叠：
-  - `create_virtual_nodes.sh`
-  - `create_virtual_uart_nodes.sh`
-  - `create_virtual_i2c_nodes.sh`
-  - `create_virtual_spi_nodes.sh`
-  - `create_virtual_can_nodes.sh`
-  - `monitor_virtual_port.sh`
-  - `monitor_virtual_uart_port.sh`
-
-### 修复思路
-- 统一改为 `debug_*` 命名，按接口能力显式区分。
-- 删除歧义旧入口，避免同功能多命令并存。
-- 新增统一清理脚本。
-
-### 实际改动
-- 新增：
-  - `scripts/debug_uart_pseudo.sh`
-  - `scripts/debug_uart_monitor.sh`
-  - `scripts/debug_i2c_stub.sh`
-  - `scripts/debug_spi_mock.sh`
-  - `scripts/debug_can_vcan.sh`
-  - `scripts/debug_iface_cleanup.sh`
-- 删除：
-  - `scripts/create_virtual_nodes.sh`
-  - `scripts/create_virtual_uart_nodes.sh`
-  - `scripts/create_virtual_i2c_nodes.sh`
-  - `scripts/create_virtual_spi_nodes.sh`
-  - `scripts/create_virtual_can_nodes.sh`
-  - `scripts/monitor_virtual_port.sh`
-  - `scripts/monitor_virtual_uart_port.sh`
-
-### 验证结果
-- 调试脚本入口改为单一命名体系，接口能力边界更清晰。
-
----
 
 ## 25. 上云消息缺少统一信封，单话题下无法稳定区分多接口设备数据
 
@@ -774,39 +862,5 @@ socat pty,link=spi-gwN ... pty,link=spi-simN ...
 ### 验证结果
 - 上云消息在单话题下可按 `interface + device_path + protocol_family + protocol_name` 区分来源。
 - `payload` 保留原业务核心字段（`connection_type/id/data`），便于云端解包处理。
-
----
-
-## 26. 缺少 MQTT/DDS 统一封包解包工具，联调无法直接验证字段完整性
-
-### 问题说明
-统一 Envelope 上线后，原测试程序仍按旧 JSON 字段输出，
-无法直接验证 `interface/device_path/protocol_*` 等新增字段。
-
-### 问题代码
-- `test/sub_data.c` 原逻辑主要打印旧格式字段（`connection_type/id/data`）。
-- `test` 目录缺少 MQTT 侧的 Envelope 解包程序。
-
-### 修复思路
-- DDS 订阅程序改为按 Envelope 字段解包并打印。
-- 新增 MQTT 订阅解包程序，统一输出关键字段。
-
-### 实际改动
-- `test/sub_data.c`
-  - 增加 Envelope 字段打印：
-    - `interface`
-    - `device_path`
-    - `protocol_family`
-    - `protocol_name`
-    - `payload.connection_type`
-    - `payload.id`
-    - `payload.data`
-- 新增 `test/mqtt_envelope_sub.py`
-  - 订阅 MQTT 上行话题并按 Envelope 结构解包打印。
-- `test/README.md`
-  - 更新为 Envelope 测试说明，并新增 MQTT 解包工具使用方法。
-
-### 验证结果
-- DDS 与 MQTT 均可在测试侧直观确认 Envelope 字段与 payload 内容。
 
 ---

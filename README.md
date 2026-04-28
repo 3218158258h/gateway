@@ -69,8 +69,10 @@ cd <project-root>
 - `gateway.ini` 的 `[router]`：路由缓冲区参数
 
 ### 3.3 设备与蓝牙
-- `gateway.ini` 的 `[device]`：串口设备列表与设备缓冲区
-- `gateway.ini` 的 `[bluetooth]`：蓝牙模块运行参数（m_addr / net_id / baud_rate）
+- `gateway.ini` 的 `[device]`：设备数量上限、缓冲区等运行参数
+- `config/transport_physical.ini` 的 `[device_registry]`：设备节点列表、接口列表、协议列表
+- `config/protocols.ini` 的 `[protocol.*]`：私有协议参数与占位符变量（`m_addr/net_id/work_baud`）
+  - `protocols` 可留空占位；空项表示该设备跳过私有协议初始化。
 
 ### 3.4 持久化
 `gateway.ini` 的 `[persistence]` 包含 SQLite 数据库与队列参数
@@ -82,7 +84,9 @@ cd <project-root>
 - 崩溃阈值与重启退避策略（`max_crash_count`/`restart_backoff_*`）
 - 正常退出是否重启（`restart_on_normal_exit`）
 
-> 多蓝牙模块场景：每个蓝牙模块对应一个串口设备，把所有串口写到 `serial_devices`（逗号分隔）即可并行接入。
+> 多蓝牙模块场景：每个蓝牙模块对应一个设备实例，把节点按顺序写入
+> `config/transport_physical.ini` 的 `[device_registry].device_paths`，
+> 并用 `interfaces/protocols` 做同序对齐。
 
 ---
 
@@ -99,7 +103,8 @@ cd <project-root>
 ./scripts/debug_uart_pseudo.sh 6 /tmp/gateway-vdev /tmp/gateway-debug-uart-map.tsv --types ble_mesh,lora
 ```
 
-脚本会输出 `uart-gw` 端口列表，把它写进 `gateway.ini` 的 `[device].serial_devices`。
+脚本会输出 `uart-gw` 端口列表，把它写进
+`config/transport_physical.ini` 的 `[device_registry].device_paths`。
 同时会生成兼容软链 `gwN/simN`，兼容旧配置与旧工具。
 映射文件列：`index type_name type_code gw_port sim_port socat_pid`。
 
@@ -175,7 +180,8 @@ sqlite3 <db_path_from_gateway_ini>
 .tables
 .schema
 SELECT COUNT(*) FROM messages;
-SELECT id, topic, status, retry_count, created_at FROM messages ORDER BY id DESC LIMIT 20;
+SELECT id, device_path, interface_name, protocol_name, status, retry_count
+FROM messages ORDER BY id DESC LIMIT 20;
 ```
 
 也可以使用项目内置 Python 脚本（使用 Python 内置 sqlite3）：
@@ -275,7 +281,7 @@ gateway/
 
 ### 7.3 配置文件职责
 
-- `gateway.ini`：总配置入口，聚合运行时、设备、持久化及分层配置文件路径。
+- `gateway.ini`：总配置入口，聚合运行时、持久化及分层配置文件路径。
 - `config/transport.ini`：MQTT/DDS 逻辑传输参数。
 - `config/transport_physical.ini`：物理链路参数（串口/CAN/SPI/I2C 等扩展位）。
 - `config/protocols.ini`：私有协议定义（帧头帧尾、ACK/NACK、初始化指令等）。

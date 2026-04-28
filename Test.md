@@ -113,7 +113,7 @@ make -C test
 
 **测试方法**
 1. 创建 3 对虚拟串口。
-2. 在 `gateway.ini` 的 `[device].serial_devices` 填入 `gw*`。
+2. 在 `config/transport_physical.ini` 的 `[device_registry].device_paths` 填入 `gw*`。
 3. 用模拟器向 `sim0` 连续发送固定 payload。
 4. 监控对应网关串口输出。
 

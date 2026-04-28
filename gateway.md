@@ -102,9 +102,9 @@
 
 ## 5. 配置体系
 
-- `gateway.ini`：总配置入口（运行时、设备、持久化、配置文件路径）。  
+- `gateway.ini`：总配置入口（运行时、持久化、配置文件路径）。  
 - `config/transport.ini`：MQTT/DDS 逻辑传输参数。  
-- `config/transport_physical.ini`：物理接口参数扩展位。  
+- `config/transport_physical.ini`：物理接口参数扩展位与设备实例清单（`[device_registry]`）。  
 - `config/protocols.ini`：私有协议定义（帧头/尾、ACK/NACK、init_cmds）。
 - `config/daemon.ini`：守护进程参数（子进程路径、日志路径、崩溃阈值、重启退避）。
 

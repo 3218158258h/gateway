@@ -10,6 +10,7 @@
 #define APP_PRIVATE_PROTOCOL_INIT_CMD_MAX_LEN 64
 #define APP_PRIVATE_PROTOCOL_MAX_INIT_CMDS 8
 #define APP_PRIVATE_PROTOCOL_MAX_PLACEHOLDERS 8
+#define APP_PRIVATE_PROTOCOL_ADDR_LEN 4
 
 /* 为现有加载器保留的兼容别名。 */
 #define APP_PROTOCOL_MAX_FRAME_BYTES APP_PRIVATE_PROTOCOL_MAX_FRAME_BYTES
@@ -39,6 +40,9 @@ typedef struct PrivateProtocolConfigStruct {
     char status_cmd[APP_PRIVATE_PROTOCOL_INIT_CMD_MAX_LEN];
     char init_cmds[APP_PRIVATE_PROTOCOL_MAX_INIT_CMDS][APP_PRIVATE_PROTOCOL_INIT_CMD_MAX_LEN];
     int init_cmds_count;
+    char m_addr[APP_PRIVATE_PROTOCOL_ADDR_LEN + 1];
+    char net_id[APP_PRIVATE_PROTOCOL_ADDR_LEN + 1];
+    int work_baud;
 } PrivateProtocolConfig;
 
 typedef PrivateProtocolConfig BluetoothProtocolConfig;

@@ -2,26 +2,11 @@
 #include "../include/app_link_adapter.h"
 #include "../include/app_bluetooth.h"
 #include "../include/app_protocol_config.h"
-#include "../include/app_config.h"
 #include "../thirdparty/log.c/log.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-
-#define DEVICE_LAYER_ADDR_LEN 4
-#define DEVICE_LAYER_DEFAULT_MADDR "0001"
-#define DEVICE_LAYER_DEFAULT_NETID "1111"
-#define DEVICE_LAYER_DEFAULT_WORK_BAUD 115200
-
-typedef struct DeviceLayerRuntimeConfigStruct {
-    char m_addr[DEVICE_LAYER_ADDR_LEN + 1];
-    char net_id[DEVICE_LAYER_ADDR_LEN + 1];
-    SerialBaudRate work_baud;
-} DeviceLayerRuntimeConfig;
-
-static DeviceLayerRuntimeConfig g_runtime_config;
-static int g_runtime_config_loaded = 0;
 
 static void app_device_layer_set_state(Device *device, DeviceState state)
 {
@@ -29,61 +14,6 @@ static void app_device_layer_set_state(Device *device, DeviceState state)
         return;
     }
     device->lifecycle_state = state;
-}
-
-static int app_device_layer_load_runtime_config(DeviceLayerRuntimeConfig *runtime)
-{
-    if (!runtime) {
-        return -1;
-    }
-
-    if (g_runtime_config_loaded) {
-        *runtime = g_runtime_config;
-        return 0;
-    }
-
-    /* 先加载默认值，确保配置缺失时仍有可运行的兜底参数。 */
-    snprintf(runtime->m_addr, sizeof(runtime->m_addr), "%s", DEVICE_LAYER_DEFAULT_MADDR);
-    snprintf(runtime->net_id, sizeof(runtime->net_id), "%s", DEVICE_LAYER_DEFAULT_NETID);
-    runtime->work_baud = (DEVICE_LAYER_DEFAULT_WORK_BAUD == 9600)
-        ? SERIAL_BAUD_RATE_9600
-        : SERIAL_BAUD_RATE_115200;
-
-    ConfigManager cfg_mgr = {0};
-    if (config_init(&cfg_mgr, APP_GATEWAY_CONFIG_FILE) != 0) {
-        g_runtime_config = *runtime;
-        g_runtime_config_loaded = 1;
-        return 0;
-    }
-    if (config_load(&cfg_mgr) != 0) {
-        config_destroy(&cfg_mgr);
-        g_runtime_config = *runtime;
-        g_runtime_config_loaded = 1;
-        return 0;
-    }
-
-    char value[CONFIG_MAX_VALUE_LEN] = {0};
-    /* 运行参数来自 gateway.ini 的 bluetooth 节，避免写死在设备逻辑里。 */
-    if (config_get_string(&cfg_mgr, "bluetooth", "m_addr", DEVICE_LAYER_DEFAULT_MADDR,
-                          value, sizeof(value)) == 0 && strlen(value) == DEVICE_LAYER_ADDR_LEN) {
-        snprintf(runtime->m_addr, sizeof(runtime->m_addr), "%s", value);
-    }
-    if (config_get_string(&cfg_mgr, "bluetooth", "net_id", DEVICE_LAYER_DEFAULT_NETID,
-                          value, sizeof(value)) == 0 && strlen(value) == DEVICE_LAYER_ADDR_LEN) {
-        snprintf(runtime->net_id, sizeof(runtime->net_id), "%s", value);
-    }
-
-    int baud_rate = config_get_int(&cfg_mgr, "bluetooth", "baud_rate", DEVICE_LAYER_DEFAULT_WORK_BAUD);
-    if (baud_rate == 9600) {
-        runtime->work_baud = SERIAL_BAUD_RATE_9600;
-    } else {
-        runtime->work_baud = SERIAL_BAUD_RATE_115200;
-    }
-
-    config_destroy(&cfg_mgr);
-    g_runtime_config = *runtime;
-    g_runtime_config_loaded = 1;
-    return 0;
 }
 
 static int app_device_layer_send_command(SerialDevice *serial_device, const char *cmd)
@@ -147,8 +77,9 @@ static int app_device_layer_apply_protocol_serial(SerialDevice *serial_device,
     /* 设备层只编排流程，不直接拼协议字节。 */
     app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURING);
 
-    DeviceLayerRuntimeConfig runtime = {0};
-    app_device_layer_load_runtime_config(&runtime);
+    SerialBaudRate work_baud = (protocol->work_baud == 9600)
+                               ? SERIAL_BAUD_RATE_9600
+                               : SERIAL_BAUD_RATE_115200;
 
     /* 协议层和传输层在这里完成绑定。 */
     app_bluetooth_clear_context(serial_device->super.fd);
@@ -189,9 +120,9 @@ static int app_device_layer_apply_protocol_serial(SerialDevice *serial_device,
     for (int i = 0; i < protocol->init_cmds_count; i++) {
         char expanded[APP_PROTOCOL_INIT_CMD_MAX_LEN];
         AppProtocolPlaceholder placeholders[] = {
-            {"m_addr", runtime.m_addr},
-            {"net_id", runtime.net_id},
-            {"baud_code", (runtime.work_baud == SERIAL_BAUD_RATE_9600) ? "4" : "8"},
+            {"m_addr", protocol->m_addr},
+            {"net_id", protocol->net_id},
+            {"baud_code", (work_baud == SERIAL_BAUD_RATE_9600) ? "4" : "8"},
         };
         if (app_private_protocol_expand_template(protocol->init_cmds[i], expanded, sizeof(expanded),
                                                  placeholders, 3) < 0) {
@@ -208,7 +139,7 @@ static int app_device_layer_apply_protocol_serial(SerialDevice *serial_device,
         }
     }
 
-    if (app_serial_setBaudRate(serial_device, runtime.work_baud) != 0 ||
+    if (app_serial_setBaudRate(serial_device, work_baud) != 0 ||
         app_serial_setBlockMode(serial_device, 1) != 0) {
         app_device_layer_set_state(&serial_device->super, DEVICE_STATE_ERROR);
         return -1;
@@ -235,6 +166,22 @@ static int app_device_layer_apply_protocol(SerialDevice *serial_device, const ch
         log_error("[protocol] event=apply_rejected reason=invalid_device_handle protocol=%s",
                   protocol_name ? protocol_name : "");
         return -1;
+    }
+
+    if (!protocol_name || protocol_name[0] == '\0') {
+        /* 空协议表示该设备仅启用链路层收发，不做私有协议初始化与组帧。 */
+        serial_device->super.connection_type = CONNECTION_TYPE_NONE;
+        serial_device->transport.protocol_name[0] = '\0';
+        if (serial_device->transport.interface_type == APP_INTERFACE_SERIAL) {
+            /* 串口在无私有协议场景下也不挂蓝牙帧处理钩子。 */
+            serial_device->super.vptr->post_read = NULL;
+            serial_device->super.vptr->pre_write = NULL;
+        }
+        app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURED);
+        log_info("[protocol] event=skip_empty device=%s interface=%s",
+                 serial_device->super.filename ? serial_device->super.filename : "",
+                 app_transport_interface_to_string(serial_device->transport.interface_type));
+        return 0;
     }
 
     app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURING);
