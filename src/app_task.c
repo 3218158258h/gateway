@@ -396,7 +396,7 @@ void app_task_signal_stop(void)
 void app_task_wait(void)
 {
     while (!task_should_stop && is_initialized) {
-        usleep(100000);  // 100ms
+        usleep(100000);  // 100ms，避免空转占满 CPU。
     }
 }
 

@@ -39,7 +39,7 @@ typedef struct PhysicalTransportConfigStruct
 {
     AppInterfaceType interface_type;  /* 物理接口类型。 */
     char device_path[256];            /* 设备路径。 */
-    char protocol_name[64];           /* 协议名称（来自 gateway.ini 设备协议配置）。 */
+    char protocol_name[64];           /* 协议名称（来自 device_registry 的设备协议配置）。 */
     struct
     {
         SerialBaudRate baud_rate;     /* 波特率。 */

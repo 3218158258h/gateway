@@ -557,7 +557,7 @@ static void on_cloud_message_log(RouterManager *router, const char *topic,
  */
 int app_runner_run()
 {
-    // 注册信号处理函数（SIGINT: Ctrl+C, SIGTERM: kill命令）
+    // 注册信号处理函数（SIGINT：Ctrl+C；SIGTERM：终止命令）。
     signal(SIGINT, app_runner_signal_handler);
     signal(SIGTERM, app_runner_signal_handler);
 

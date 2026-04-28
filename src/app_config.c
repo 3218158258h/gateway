@@ -204,7 +204,7 @@ int config_load(ConfigManager *config)
             continue;
         }
         
-        // 解析节名 [section]
+        // 解析节名 [section]。
         if (*p == '[') {
             char *end = strchr(p, ']');
             if (end) {
@@ -215,7 +215,7 @@ int config_load(ConfigManager *config)
             continue;
         }
         
-        // 解析键值对 key = value
+        // 解析键值对 key=value。
         char *eq = strchr(p, '=');
         if (eq) {
             *eq = '\0';

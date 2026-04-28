@@ -141,7 +141,7 @@ int app_message_initByBinary(Message *message, void *binary, int len)
         return -1;
     }
 
-    // 分配payload内存
+    // 分配 payload 内存。
     message->payload = malloc(message->id_len + message->data_len);
 
     if (!message->payload)
@@ -150,7 +150,7 @@ int app_message_initByBinary(Message *message, void *binary, int len)
         return -1;
     }
 
-    // 复制payload数据（ID + 数据）
+    // 复制 payload 数据（ID + 数据）。
     memcpy(message->payload, binary + 3, message->id_len + message->data_len);
     return 0;
 }
@@ -176,7 +176,7 @@ int app_message_initByJson(Message *message, char *json_str, int len)
     // 清零消息结构体
     memset(message, 0, sizeof(Message));
     
-    // 解析JSON对象
+    // 解析 JSON 对象。
     cJSON *json_object = cJSON_ParseWithLength(json_str, len);
     if (!json_object) {
         log_warn("Failed to parse JSON");
@@ -192,7 +192,7 @@ int app_message_initByJson(Message *message, char *json_str, int len)
     }
     message->connection_type = connection_type->valueint;
 
-    // 获取ID字段（十六进制字符串）
+    // 获取 ID 字段（十六进制字符串）。
     cJSON *id = cJSON_GetObjectItem(json_object, "id");
     if (!id || !cJSON_IsString(id)) {
         log_warn("Missing or invalid id field");
@@ -200,7 +200,7 @@ int app_message_initByJson(Message *message, char *json_str, int len)
         return -1;
     }
 
-    // 验证ID字符串长度（必须是偶数）
+    // 验证 ID 字符串长度（必须是偶数）。
     if (strlen(id->valuestring) % 2 != 0)
     {
         log_warn("Message id is not valid");
@@ -226,7 +226,7 @@ int app_message_initByJson(Message *message, char *json_str, int len)
     }
     message->data_len = strlen(data->valuestring) / 2;
 
-    // 分配payload内存
+    // 分配 payload 内存。
     message->payload = malloc(message->id_len + message->data_len);
 
     if (!message->payload)
@@ -236,7 +236,7 @@ int app_message_initByJson(Message *message, char *json_str, int len)
         return -1;
     }
 
-    // 将ID从十六进制字符串转为二进制
+    // 将 ID 从十六进制字符串转为二进制。
     if (str_to_bin(id->valuestring, message->payload, message->id_len) < 0)
     {
         log_warn("ID conversion failed");
@@ -289,7 +289,7 @@ int app_message_saveBinary(Message *message, void *binary, int len)
     memcpy(binary + 1, &message->id_len, 1);            // 设备标识长度
     memcpy(binary + 2, &message->data_len, 1);          // 数据长度
     
-    // 写入payload数据
+    // 写入 payload 数据。
     if (message->payload && (message->id_len + message->data_len) > 0) {
         memcpy(binary + 3, message->payload, message->id_len + message->data_len);
     }
@@ -313,14 +313,14 @@ int app_message_saveJson(Message *message, char *json_str, int len)
         return -1;
     }
 
-    // 创建JSON对象
+    // 创建 JSON 对象。
     cJSON *json_object = cJSON_CreateObject();
     if (!json_object) return -1;
 
     char *id_str = NULL;
     char *data_str = NULL;
     
-    // 将ID转为十六进制字符串
+    // 将 ID 转为十六进制字符串。
     if (message->payload && message->id_len > 0) {
         id_str = bin_to_str(message->payload, message->id_len);
     }
@@ -338,7 +338,7 @@ int app_message_saveJson(Message *message, char *json_str, int len)
         goto cleanup;
     }
 
-    // 构建JSON对象
+    // 构建 JSON 对象。
     cJSON_AddNumberToObject(json_object, "connection_type", message->connection_type);
     cJSON_AddStringToObject(json_object, "id", id_str ? id_str : "");
     cJSON_AddStringToObject(json_object, "data", data_str ? data_str : "");

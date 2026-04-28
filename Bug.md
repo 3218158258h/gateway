@@ -864,3 +864,39 @@ socat pty,link=spi-gwN ... pty,link=spi-simN ...
 - `payload` 保留原业务核心字段（`connection_type/id/data`），便于云端解包处理。
 
 ---
+
+---
+
+## 32. 其他模块注释同步不充分，跨模块阅读成本偏高
+
+### 问题说明
+在完成核心链路注释补齐后，mqtt/ota/buffer/config/dds 等模块仍有部分注释表达不统一，
+导致阅读时在不同模块间切换成本较高，尤其是状态机、回调、重试与下载流程。
+
+### 问题代码
+- src/mqtt/app_mqtt_v2.c：重连、状态回调与发布路径说明不够统一。
+- src/ota/app_ota.c：下载/验签/安装流程中部分说明风格不一致。
+- src/dds/app_transport.c、src/dds/app_dds.c：关键流程注释有零散英文或混排。
+- src/app_buffer.c、src/app_config.c、src/app_message.c 等：细粒度逻辑注释存在不一致。
+- include/app_serial.h：protocol_name 来源描述已过时。
+
+### 修复思路
+- 只处理 影响理解的关键注释，不做格式化噪声修改。
+- 统一描述方式：状态切换、回调触发、失败分支、资源释放路径优先补齐。
+- 修正过时注释，确保与当前配置架构一致。
+
+### 实际改动
+- src/mqtt/app_mqtt_v2.c
+  - 重连、连接状态、发布/订阅、线程循环等关键路径注释统一为中文说明。
+- src/ota/app_ota.c
+  - 检查更新、下载、验签、安装、回滚流程的关键注释补齐并统一。
+- src/dds/app_transport.c、src/dds/app_dds.c
+  - 传输初始化、主题注册、状态映射与发布订阅路径注释统一。
+- src/app_buffer.c、src/app_config.c、src/app_message.c
+  - 核心处理分支注释补齐。
+- include/app_serial.h
+  - protocol_name 注释改为来自 device_registry。
+
+### 验证结果
+- 主要模块注释风格与语义基本统一，跨模块阅读连续性提升。
+- 配置来源说明与当前架构一致，减少误读风险。

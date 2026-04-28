@@ -253,7 +253,7 @@ static void mqtt_state_callback(MqttClient *client, MqttState state)
     TransportManager *manager = (TransportManager *)client->user_data;
     if (!manager) return;
     
-    // 映射MQTT状态到传输层状态
+    // 将 MQTT 状态映射到传输层状态。
     TransportState tstate;
     switch (state) {
         case MQTT_STATE_CONNECTED:    tstate = TRANSPORT_STATE_CONNECTED; break;
@@ -264,7 +264,7 @@ static void mqtt_state_callback(MqttClient *client, MqttState state)
     
     transport_set_state(manager, tstate);
     
-    // 触发上层状态变化回调
+    // 触发上层状态变化回调。
     if (manager->on_state_changed) {
         manager->on_state_changed(manager, tstate);
     }
@@ -302,10 +302,10 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
 {
     if (!manager) return -1;
     
-    // 清零结构体
+    // 清零结构体。
     memset(manager, 0, sizeof(TransportManager));
     
-    // 加载配置
+    // 加载配置。
     if (config) {
         memcpy(&manager->config, config, sizeof(TransportConfig));
     } else {
@@ -318,10 +318,10 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
     manager->state = TRANSPORT_STATE_DISCONNECTED;
     manager->active_type = manager->config.type;
     
-    // 根据传输类型初始化对应客户端
+    // 根据传输类型初始化对应客户端。
     if (manager->config.type == TRANSPORT_TYPE_MQTT || 
         manager->config.type == TRANSPORT_TYPE_AUTO) {
-        // 初始化MQTT客户端
+        // 初始化 MQTT 客户端。
         MqttConfig mqtt_cfg = {0};
         strncpy(mqtt_cfg.broker_url, manager->config.mqtt_broker, sizeof(mqtt_cfg.broker_url) - 1);
         strncpy(mqtt_cfg.client_id, manager->config.mqtt_client_id, sizeof(mqtt_cfg.client_id) - 1);
@@ -333,7 +333,7 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
     
         MqttClient *mqtt = malloc(sizeof(MqttClient));
         if (mqtt && mqtt_init(mqtt, &mqtt_cfg) == 0) {
-            mqtt->user_data = manager;  // 用于回调转发
+            mqtt->user_data = manager;  // 用于回调转发。
             mqtt_on_message(mqtt, mqtt_message_callback);
             mqtt_on_state_changed(mqtt, mqtt_state_callback);
             manager->mqtt_client = mqtt;
@@ -344,7 +344,7 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
         }
     }
     
-    // 初始化DDS客户端
+    // 初始化 DDS 客户端。
     if (manager->config.type == TRANSPORT_TYPE_DDS) {
         if (!dds_is_compiled_enabled()) {
             log_error("DDS transport requested but DDS support is unavailable in current binary");
@@ -360,7 +360,7 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
             dds_cfg.default_qos = dds_qos_default();
             dds_cfg.auto_discovery = 1;
         
-            // 配置DDS话题
+            // 配置 DDS 话题。
             strncpy(dds_cfg.default_publish_topic, manager->config.dds_publish_topic,
                 sizeof(dds_cfg.default_publish_topic) - 1);
             strncpy(dds_cfg.default_publish_type, manager->config.dds_publish_type,
@@ -374,7 +374,7 @@ int transport_init(TransportManager *manager, const TransportConfig *config)
                 dds->user_data = manager;
                 dds_on_data_available(dds, dds_data_callback);
             
-                // 注册DDS默认话题
+                // 注册 DDS 默认话题。
                 dds_register_default_topics(dds);
             
                 manager->dds_manager = dds;
@@ -423,17 +423,17 @@ void transport_close(TransportManager *manager)
 {
     if (!manager) return;
     
-    // 断开连接
+    // 断开连接。
     transport_disconnect(manager);
     
-    // 释放MQTT客户端
+    // 释放 MQTT 客户端。
     if (manager->mqtt_client) {
         mqtt_destroy((MqttClient *)manager->mqtt_client);
         free(manager->mqtt_client);
         manager->mqtt_client = NULL;
     }
     
-    // 释放DDS管理器
+    // 释放 DDS 管理器。
     if (manager->dds_manager) {
         dds_close((DdsManager *)manager->dds_manager);
         free(manager->dds_manager);
@@ -460,7 +460,7 @@ int transport_connect(TransportManager *manager)
     manager->health.connect_attempts++;
     transport_set_state(manager, TRANSPORT_STATE_CONNECTING);
     
-    // 根据活动类型执行连接
+    // 根据活动类型执行连接。
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
         int rc = mqtt_start((MqttClient *)manager->mqtt_client);
         if (rc != 0) {
@@ -471,7 +471,7 @@ int transport_connect(TransportManager *manager)
         }
         return 0;
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
-        // DDS不需要显式连接，直接设置为已连接状态
+        // DDS 不需要显式连接，直接设置为已连接状态。
         transport_set_state(manager, TRANSPORT_STATE_CONNECTED);
         return 0;
     }
@@ -491,7 +491,7 @@ void transport_disconnect(TransportManager *manager)
 {
     if (!manager) return;
     
-    // 停止MQTT客户端
+    // 停止 MQTT 客户端。
     if (manager->mqtt_client) {
         mqtt_stop((MqttClient *)manager->mqtt_client);
     }
@@ -521,7 +521,7 @@ int transport_is_connected(TransportManager *manager)
 {
     if (!manager) return 0;
     
-    // 根据活动类型检查连接状态
+    // 根据活动类型检查连接状态。
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
         return mqtt_is_connected((MqttClient *)manager->mqtt_client);
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
@@ -549,7 +549,7 @@ int transport_publish(TransportManager *manager, const char *topic,
 
     manager->health.publish_attempts++;
 
-    // 根据活动类型调用对应发布接口
+    // 根据活动类型调用对应发布接口。
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
         int rc = mqtt_publish((MqttClient *)manager->mqtt_client, topic,
                               data, len, manager->config.default_qos);
@@ -603,7 +603,7 @@ int transport_subscribe(TransportManager *manager, const char *topic)
 
     manager->health.subscribe_attempts++;
 
-    // 根据活动类型调用对应订阅接口
+    // 根据活动类型调用对应订阅接口。
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
         int rc = mqtt_subscribe((MqttClient *)manager->mqtt_client,
                                 topic, manager->config.default_qos);
@@ -639,7 +639,7 @@ int transport_unsubscribe(TransportManager *manager, const char *topic)
 {
     if (!manager || !topic) return -1;
     
-    // 根据活动类型调用对应取消订阅接口
+    // 根据活动类型调用对应取消订阅接口。
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
         return mqtt_unsubscribe((MqttClient *)manager->mqtt_client, topic);
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
@@ -662,7 +662,7 @@ int transport_switch_type(TransportManager *manager, TransportType type)
 {
     if (!manager || !manager->is_initialized) return -1;
     
-    // 类型相同则无需切换
+    // 类型相同则无需切换。
     if (type == manager->active_type) {
         return 0;
     }
@@ -671,13 +671,13 @@ int transport_switch_type(TransportManager *manager, TransportType type)
              transport_type_to_string(manager->active_type),
              transport_type_to_string(type));
     
-    // 断开当前连接
+    // 断开当前连接。
     transport_disconnect(manager);
     
-    // 切换活动类型
+    // 切换活动类型。
     manager->active_type = type;
     
-    // 重新连接
+    // 重新连接。
     int rc = transport_connect(manager);
     if (rc != 0) {
         transport_record_error(manager, "switch_connect", rc);
@@ -738,14 +738,14 @@ int transport_subscribe_default(TransportManager *manager)
     if (!manager || !manager->is_initialized) return -1;
     
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
-        // MQTT订阅命令主题
+        // MQTT 订阅命令主题。
         const char *topic = manager->config.subscribe_topic;
         if (topic[0]) {
             log_info("MQTT subscribing to command topic: %s", topic);
             return transport_subscribe(manager, topic);
         }
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
-        // DDS订阅默认主题
+        // DDS 订阅默认主题。
         int rc = dds_subscribe_default((DdsManager *)manager->dds_manager);
         manager->health.subscribe_attempts++;
         if (rc != 0) {
@@ -778,12 +778,12 @@ int transport_publish_default(TransportManager *manager,
     if (!manager || !data) return -1;
     
     if (manager->active_type == TRANSPORT_TYPE_MQTT && manager->mqtt_client) {
-        // MQTT发布到数据主题
+        // MQTT 发布到数据主题。
         const char *topic = manager->config.publish_topic[0] ? 
                             manager->config.publish_topic : "gateway/data";
         return transport_publish(manager, topic, data, len);
     } else if (manager->active_type == TRANSPORT_TYPE_DDS && manager->dds_manager) {
-        // DDS发布到默认主题
+        // DDS 发布到默认主题。
         int rc = dds_publish_default((DdsManager *)manager->dds_manager, data, len);
         manager->health.publish_attempts++;
         if (rc != 0) {
@@ -810,7 +810,7 @@ const char *transport_get_publish_topic(TransportManager *manager)
 {
     if (!manager) return "gateway/data";
     
-    // 根据活动类型返回对应主题
+    // 根据活动类型返回对应主题。
     if (manager->active_type == TRANSPORT_TYPE_MQTT) {
         return manager->config.publish_topic[0] ? 
                manager->config.publish_topic : "gateway/data";
@@ -830,7 +830,7 @@ const char *transport_get_subscribe_topic(TransportManager *manager)
 {
     if (!manager) return "gateway/command";
     
-    // 根据活动类型返回对应主题
+    // 根据活动类型返回对应主题。
     if (manager->active_type == TRANSPORT_TYPE_MQTT) {
         return manager->config.subscribe_topic[0] ? 
                manager->config.subscribe_topic : "gateway/command";
