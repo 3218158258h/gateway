@@ -11,6 +11,7 @@
 #define I2C_MAX_POLL_LEN 64
 #define I2C_DEFAULT_POLL_MS 500
 
+/* 统一轮询休眠入口，未配置周期时回退到默认值。 */
 static void sleep_poll_interval(int poll_interval_ms)
 {
     int interval = poll_interval_ms > 0 ? poll_interval_ms : I2C_DEFAULT_POLL_MS;
@@ -28,6 +29,7 @@ void *app_iface_i2c_background_task(void *argv)
     int error_count = 0;
     while (device->is_running) {
         unsigned int read_len = serial_device->transport.i2c.read_len;
+        /* read_len=0 表示仅保活不主动轮询，避免无意义总线访问。 */
         if (read_len == 0) {
             sleep_poll_interval(serial_device->transport.i2c.poll_interval_ms);
             continue;
@@ -37,6 +39,7 @@ void *app_iface_i2c_background_task(void *argv)
         }
 
         int reg_width = serial_device->transport.i2c.register_addr_width;
+        /* 当前仅支持 1 或 2 字节寄存器地址，不合法值回退为 1 字节。 */
         if (reg_width != 2) {
             reg_width = 1;
         }
@@ -50,6 +53,7 @@ void *app_iface_i2c_background_task(void *argv)
         }
 
         unsigned char read_buf[I2C_MAX_POLL_LEN] = {0};
+        /* I2C_RDWR 组合事务：先写寄存器地址，再紧跟一次读操作。 */
         struct i2c_msg msgs[2];
         memset(msgs, 0, sizeof(msgs));
         msgs[0].addr = serial_device->transport.i2c.address;
@@ -67,6 +71,7 @@ void *app_iface_i2c_background_task(void *argv)
 
         if (ioctl(device->fd, I2C_RDWR, &ioctl_data) < 0) {
             error_count++;
+            /* 限频打印：启动阶段快速暴露，长时间失败按间隔记录。 */
             if (error_count <= 3 || (error_count % 20) == 0) {
                 log_warn("[i2c] poll_failed device=%s addr=0x%02X reg=0x%04X errno=%d(%s) count=%d",
                          device->filename ? device->filename : "",
@@ -82,6 +87,7 @@ void *app_iface_i2c_background_task(void *argv)
 
         error_count = 0;
         unsigned char packet[3 + 1 + 1 + I2C_MAX_POLL_LEN];
+        /* 内部帧格式：[type][id_len=1][data_len=read_len+1][id=addr][reg_low][payload...] */
         packet[0] = (unsigned char)device->connection_type;
         packet[1] = 1;
         packet[2] = (unsigned char)(read_len + 1);

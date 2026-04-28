@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 
+/* 守护进程默认配置：尽量使用可直接运行的保守参数。 */
 void daemon_config_set_defaults(DaemonConfig *config)
 {
     if (!config) {
@@ -30,6 +31,7 @@ static void daemon_config_sanitize(DaemonConfig *config)
     if (!config) {
         return;
     }
+    /* 字符串字段为空时回填默认值，避免后续 fork/exec 使用空路径。 */
     if (config->program_path[0] == '\0') {
         snprintf(config->program_path, sizeof(config->program_path), "%s", "/home/root/gateway/gateway");
     }
@@ -46,6 +48,7 @@ static void daemon_config_sanitize(DaemonConfig *config)
         snprintf(config->ota_arg, sizeof(config->ota_arg), "%s", "ota");
     }
 
+    /* 数值字段做下限和关联校验，防止配置导致高频重启或无效循环。 */
     if (config->max_crash_count <= 0) {
         config->max_crash_count = 10;
     }
@@ -69,6 +72,7 @@ int daemon_config_load(DaemonConfig *config, const char *config_file)
         return -1;
     }
 
+    /* 先装载默认值，再覆盖配置文件；这样缺项时仍有稳定行为。 */
     daemon_config_set_defaults(config);
 
     const char *cfg_file = (config_file && config_file[0]) ? config_file : APP_DAEMON_CONFIG_FILE;
@@ -109,6 +113,7 @@ int daemon_config_load(DaemonConfig *config, const char *config_file)
                                                      config->restart_on_normal_exit);
 
     config_destroy(&cfg);
+    /* 完成读取后统一归一化，保证运行期参数合法。 */
     daemon_config_sanitize(config);
 
     return 0;

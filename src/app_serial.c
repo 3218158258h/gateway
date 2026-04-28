@@ -7,6 +7,7 @@
 #include <strings.h>
 #include <stdlib.h>
 
+/* 传输配置默认值：作为配置文件缺失时的兜底。 */
 void app_transport_config_init(SerialDevice *serial_device)
 {
     if (!serial_device) {
@@ -23,6 +24,7 @@ void app_transport_config_init(SerialDevice *serial_device)
 
 AppInterfaceType app_transport_string_to_interface(const char *interface_name)
 {
+    /* 历史兼容：serial 和 uart 等价。 */
     if (!interface_name || interface_name[0] == '\0' ||
         strcasecmp(interface_name, "serial") == 0 ||
         strcasecmp(interface_name, "uart") == 0) {
@@ -143,6 +145,7 @@ int app_transport_config_load(SerialDevice *serial_device, const char *config_fi
 
     serial_device->transport.i2c.bus_speed_hz = (unsigned int)config_get_int(
         &cfg_mgr, section_name, "bus_speed_hz", (int)serial_device->transport.i2c.bus_speed_hz);
+    /* address 支持十进制和 0x 前缀十六进制。 */
     if (config_get_string(&cfg_mgr, section_name, "address", "", value, sizeof(value)) == 0 &&
         value[0] != '\0') {
         char *endptr = NULL;
@@ -208,6 +211,7 @@ static int app_serial_setRaw(SerialDevice *serial_device)
 int app_serial_init(SerialDevice *serial_device, char *filename)
 {
     if (!serial_device || !filename) return -1;
+    /* 若上层未提前装载物理配置，则先读取串口默认节。 */
     if (serial_device->transport.device_path[0] == '\0') {
         app_transport_config_load(serial_device, APP_PHYSICAL_TRANSPORT_CONFIG_FILE, "transport.serial_default");
     }
@@ -292,6 +296,7 @@ int app_serial_setBlockMode(SerialDevice *serial_device, int block_mode)
 
     if (block_mode)
     {
+        /* 阻塞模式：至少读到 1 字节才返回。 */
         options.c_cc[VTIME] = 0;
         options.c_cc[VMIN] = 1;
     }

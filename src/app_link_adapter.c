@@ -38,6 +38,7 @@ static const char *default_section_by_type(AppInterfaceType interface_type)
     }
 }
 
+/* 允许配置节省略 interface 字段；若填写了则必须与期望类型一致。 */
 static int section_interface_matches(ConfigManager *cfg_mgr, const char *section,
                                      AppInterfaceType expected_type)
 {
@@ -67,6 +68,7 @@ static int load_physical_config_for_device(SerialDevice *device, const char *dev
         return 0;
     }
 
+    /* 匹配策略：先按 device_path 精确命中，再校验 interface 类型。 */
     const char *matched_section = NULL;
     for (int i = 0; i < cfg_mgr.item_count; i++) {
         ConfigItem *item = &cfg_mgr.items[i];
@@ -83,6 +85,7 @@ static int load_physical_config_for_device(SerialDevice *device, const char *dev
         break;
     }
 
+    /* 若未找到设备专属配置，回退到对应接口 default 节。 */
     if (!matched_section) {
         matched_section = default_section_by_type(interface_type);
     }
@@ -105,6 +108,7 @@ static int can_post_read(Device *device, void *ptr, int *len)
         return 0;
     }
 
+    /* 将原生 can_frame 统一转换为网关内部帧，便于路由层复用。 */
     struct can_frame *frame = (struct can_frame *)ptr;
     unsigned char out[3 + CAN_MESSAGE_ID_LEN + CAN_MESSAGE_MAX_DATA_LEN];
     int data_len = frame->can_dlc;
@@ -145,6 +149,7 @@ static int can_pre_write(Device *device, void *ptr, int *len)
         return -1;
     }
 
+    /* 将内部帧回填为 can_frame，供底层 socket 直接发送。 */
     struct can_frame frame;
     memset(&frame, 0, sizeof(frame));
     frame.can_id = 0;
@@ -171,6 +176,7 @@ static int init_can_device(SerialDevice *device, const char *device_path)
         return -1;
     }
 
+    /* CAN 不使用字符设备 fd，改为 PF_CAN 原始套接字。 */
     int sock_fd = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (sock_fd < 0) {
         log_error("Failed to create CAN socket for %s: %s", device_path, strerror(errno));
@@ -252,6 +258,7 @@ static int init_spi_device(SerialDevice *device, const char *device_path)
     if (ioctl(device->super.fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
         log_warn("SPI set clock_hz failed for %s: %s", device_path, strerror(errno));
     }
+    /* SPI 为主轮询模式，绑定专用后台任务执行周期事务。 */
     device->super.vptr->background_task = app_iface_spi_background_task;
     return 0;
 }
@@ -278,6 +285,7 @@ static int init_i2c_device(SerialDevice *device, const char *device_path)
                      strerror(saved_errno));
         }
     }
+    /* I2C 绑定专用后台任务，按配置寄存器轮询。 */
     device->super.vptr->background_task = app_iface_i2c_background_task;
     return 0;
 }
