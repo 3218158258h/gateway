@@ -41,10 +41,24 @@ def main() -> int:
     count = cur.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     print(f"messages count: {count}")
 
-    query = (
-        "SELECT id, topic, payload_len, qos, status, retry_count, create_time, update_time "
-        "FROM messages ORDER BY id DESC LIMIT ?"
+    columns = [row[1] for row in cur.execute("PRAGMA table_info(messages)").fetchall()]
+    has_new_schema = all(
+        col in columns
+        for col in ("device_path", "interface_name", "protocol_family", "protocol_name")
     )
+
+    if has_new_schema:
+        query = (
+            "SELECT id, device_path, interface_name, protocol_family, protocol_name, "
+            "payload_len, qos, status, retry_count, create_time, update_time "
+            "FROM messages ORDER BY id DESC LIMIT ?"
+        )
+    else:
+        query = (
+            "SELECT id, topic, payload_len, qos, status, retry_count, create_time, update_time "
+            "FROM messages ORDER BY id DESC LIMIT ?"
+        )
+
     rows = cur.execute(query, (max(args.limit, 1),)).fetchall()
 
     if not rows:
@@ -54,11 +68,20 @@ def main() -> int:
 
     print("latest messages:")
     for row in rows:
-        print(
-            f"id={row['id']} topic={row['topic']} payload_len={row['payload_len']} "
-            f"qos={row['qos']} status={row['status']} retry={row['retry_count']} "
-            f"create={row['create_time']} update={row['update_time']}"
-        )
+        if has_new_schema:
+            print(
+                f"id={row['id']} device_path={row['device_path']} "
+                f"interface={row['interface_name']} protocol_family={row['protocol_family']} "
+                f"protocol_name={row['protocol_name']} payload_len={row['payload_len']} "
+                f"qos={row['qos']} status={row['status']} retry={row['retry_count']} "
+                f"create={row['create_time']} update={row['update_time']}"
+            )
+        else:
+            print(
+                f"id={row['id']} topic={row['topic']} payload_len={row['payload_len']} "
+                f"qos={row['qos']} status={row['status']} retry={row['retry_count']} "
+                f"create={row['create_time']} update={row['update_time']}"
+            )
 
     conn.close()
     return 0

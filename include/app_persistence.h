@@ -30,7 +30,10 @@ typedef enum {
 /* 持久化消息 */
 typedef struct PersistMessage {
     uint64_t id;                /* 消息ID */
-    char topic[256];            /* 主题 */
+    char device_path[256];      /* 设备路径 */
+    char interface_name[32];    /* 接口名称 */
+    char protocol_family[64];   /* 协议族 */
+    char protocol_name[64];     /* 协议名称 */
     uint8_t *payload;           /* 消息内容 */
     size_t payload_len;         /* 消息长度 */
     int qos;                    /* QoS级别 */
@@ -77,14 +80,21 @@ void persistence_close(PersistenceManager *manager);
 /**
  * @brief 保存消息到队列
  * @param manager 管理器指针
- * @param topic 主题
+ * @param device_path 设备路径
+ * @param interface_name 接口名称
+ * @param protocol_family 协议族
+ * @param protocol_name 协议名称
  * @param payload 消息内容
  * @param len 消息长度
  * @param qos QoS级别
  * @param out_id 输出消息ID(可为NULL)
  * @return 0成功, -1失败
  */
-int persistence_save(PersistenceManager *manager, const char *topic,
+int persistence_save(PersistenceManager *manager,
+                     const char *device_path,
+                     const char *interface_name,
+                     const char *protocol_family,
+                     const char *protocol_name,
                      const void *payload, size_t len, int qos, uint64_t *out_id);
 
 /**

@@ -1,8 +1,9 @@
-/* dds_subscriber_json.c - 订阅 GatewayData 话题 (JSON格式) */
+/* dds_subscriber_envelope.c - 订阅 GatewayData 话题（统一 Envelope） */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <dds/dds.h>
 #include "GatewayData.h"
 
@@ -73,23 +74,43 @@ static void data_available(dds_entity_t reader)
         /* 确保字符串结尾 */
         msg.data[msg.length] = '\0';
 
-        printf("\n========== 收到网关数据 ==========\n");
+        printf("\n========== 收到网关数据（Envelope） ==========\n");
         printf("数据长度: %u 字节\n", msg.length);
         printf("JSON内容: %s\n", (char *)msg.data);
 
         /* 解析JSON字段 */
         char conn_type_str[16] = {0};
+        char interface_name[32] = {0};
+        char device_path[256] = {0};
+        char protocol_family[64] = {0};
+        char protocol_name[64] = {0};
         char id_hex[256] = {0};
         char data_hex[1024] = {0};
 
+        if (extract_json_field((char *)msg.data, "interface",
+                               interface_name, sizeof(interface_name)) == 0) {
+            printf("interface: %s\n", interface_name);
+        }
+        if (extract_json_field((char *)msg.data, "device_path",
+                               device_path, sizeof(device_path)) == 0) {
+            printf("device_path: %s\n", device_path);
+        }
+        if (extract_json_field((char *)msg.data, "protocol_family",
+                               protocol_family, sizeof(protocol_family)) == 0) {
+            printf("protocol_family: %s\n", protocol_family);
+        }
+        if (extract_json_field((char *)msg.data, "protocol_name",
+                               protocol_name, sizeof(protocol_name)) == 0) {
+            printf("protocol_name: %s\n", protocol_name);
+        }
         if (extract_json_field((char *)msg.data, "connection_type",
                                conn_type_str, sizeof(conn_type_str)) == 0) {
-            printf("连接类型: %s\n", conn_type_str);
+            printf("payload.connection_type: %s\n", conn_type_str);
         }
 
         if (extract_json_field((char *)msg.data, "id",
                                id_hex, sizeof(id_hex)) == 0) {
-            printf("ID (hex): %s\n", id_hex);
+            printf("payload.id(hex): %s\n", id_hex);
 
             /* 转换为二进制显示 */
             unsigned char id_bytes[128];
@@ -105,7 +126,7 @@ static void data_available(dds_entity_t reader)
 
         if (extract_json_field((char *)msg.data, "data",
                                data_hex, sizeof(data_hex)) == 0) {
-            printf("数据 (hex): %s\n", data_hex);
+            printf("payload.data(hex): %s\n", data_hex);
 
             /* 转换为二进制并尝试显示为文本 */
             unsigned char data_bytes[512];

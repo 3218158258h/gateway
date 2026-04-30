@@ -6,7 +6,7 @@
  * - 从 config/protocols.ini 读取指定协议节（[protocol.<name>]）的全部参数
  * - 参数包括：帧格式（帧头/帧尾/ID长度）、下行指令前缀、
  *             状态检查指令（status_cmd）、设备配置指令序列（init_cmds）
- * - init_cmds 支持占位符 {m_addr} {net_id} {baud_code}，由设备层在运行时替换
+ * - init_cmds 支持占位符 {m_addr} {net_id} {baud_code}，替换值来自当前协议节
  * - 指令模板中的 \r \n 字面量在加载时自动转义为实际 CR/LF 字节
  * - 加载失败时回退到内置默认值，保证系统可启动
  */
@@ -80,6 +80,9 @@ static void app_protocol_load_defaults(BluetoothProtocolConfig *config)
     snprintf(config->init_cmds[2], APP_PROTOCOL_INIT_CMD_MAX_LEN, "AT+BAUD{baud_code}\r\n");
     snprintf(config->init_cmds[3], APP_PROTOCOL_INIT_CMD_MAX_LEN, "AT+RESET\r\n");
     config->init_cmds_count = 4;
+    snprintf(config->m_addr, sizeof(config->m_addr), "%s", "0001");
+    snprintf(config->net_id, sizeof(config->net_id), "%s", "1111");
+    config->work_baud = 115200;
 }
 
 static int app_protocol_validate(const char *section,
@@ -128,6 +131,21 @@ static int app_protocol_validate(const char *section,
                  section, config->init_cmds_count);
         return -1;
     }
+    if (strlen(config->m_addr) != APP_PRIVATE_PROTOCOL_ADDR_LEN) {
+        snprintf(reason, reason_len, "%s.m_addr length must be %d",
+                 section, APP_PRIVATE_PROTOCOL_ADDR_LEN);
+        return -1;
+    }
+    if (strlen(config->net_id) != APP_PRIVATE_PROTOCOL_ADDR_LEN) {
+        snprintf(reason, reason_len, "%s.net_id length must be %d",
+                 section, APP_PRIVATE_PROTOCOL_ADDR_LEN);
+        return -1;
+    }
+    if (config->work_baud != 9600 && config->work_baud != 115200) {
+        snprintf(reason, reason_len, "%s.work_baud=%d unsupported(9600/115200)",
+                 section, config->work_baud);
+        return -1;
+    }
     return 0;
 }
 
@@ -143,6 +161,7 @@ static int app_protocol_validate(const char *section,
  *   - status_cmd: 状态检查指令模板（\r\n 自动转义）
  *   - init_cmds: 分号分隔的设备配置指令序列（\r\n 自动转义）
  *
+ * m_addr/net_id/work_baud 也在协议节内定义，避免依赖 gateway.ini 的 [bluetooth]。
  * 加载失败或字段缺失时保留 app_protocol_load_defaults 设定的默认值。
  *
  * @param protocol_name 协议名称（对应 protocols.ini [protocol.<name>]）
@@ -239,6 +258,33 @@ int app_protocol_load_bluetooth(const char *protocol_name, BluetoothProtocolConf
                           value, sizeof(value)) == 0 &&
         value[0] != '\0') {
         snprintf(config->mesh_cmd_prefix, sizeof(config->mesh_cmd_prefix), "%s", value);
+    }
+
+    if (config_get_string(&cfg_mgr, section, "m_addr", "", value, sizeof(value)) == 0 &&
+        value[0] != '\0') {
+        if (strlen(value) == APP_PRIVATE_PROTOCOL_ADDR_LEN) {
+            snprintf(config->m_addr, sizeof(config->m_addr), "%s", value);
+        } else {
+            log_warn("Invalid %s.m_addr=%s, fallback default", section, value);
+            parse_errors++;
+        }
+    }
+
+    if (config_get_string(&cfg_mgr, section, "net_id", "", value, sizeof(value)) == 0 &&
+        value[0] != '\0') {
+        if (strlen(value) == APP_PRIVATE_PROTOCOL_ADDR_LEN) {
+            snprintf(config->net_id, sizeof(config->net_id), "%s", value);
+        } else {
+            log_warn("Invalid %s.net_id=%s, fallback default", section, value);
+            parse_errors++;
+        }
+    }
+
+    config->work_baud = config_get_int(&cfg_mgr, section, "work_baud", config->work_baud);
+    if (config->work_baud != 9600 && config->work_baud != 115200) {
+        log_warn("Invalid %s.work_baud=%d, fallback default", section, config->work_baud);
+        config->work_baud = 115200;
+        parse_errors++;
     }
 
     /* 解析状态检查指令（允许为空，空表示跳过状态检查） */

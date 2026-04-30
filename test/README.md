@@ -1,4 +1,4 @@
-该目录下的订阅者/发布者用于测试网关在 DDS 模式下的转发能力。
+该目录下的程序用于测试网关统一 Envelope 上云格式。
 
 # 编译
 在项目根目录执行：
@@ -7,9 +7,9 @@ make -C test
 ```
 
 # 运行
-## 订阅 GatewayData
+## 订阅 GatewayData（DDS Envelope 解包）
 ```bash
-./subscriber
+./sub_data
 ```
 
 ## 发布 GatewayCommand（支持持续发布、递增载荷、设备类型）
@@ -29,3 +29,12 @@ make -C test
 - `--connection-type N`：数值类型（0/1/2）
 - `--device-type NAME`：类型别名（`none|lora|ble_mesh`）
 - `--type-seq LIST`：类型序列（逗号分隔，循环使用）
+
+## MQTT Envelope 解包
+```bash
+python3 mqtt_envelope_sub.py --host 127.0.0.1 --port 1883 --topic gateway/data
+```
+
+说明：
+- 依赖 `paho-mqtt`：`pip3 install paho-mqtt`
+- 输出字段包含：`interface/device_path/protocol_family/protocol_name/payload.*`

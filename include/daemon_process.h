@@ -3,19 +3,17 @@
 
 #include <sys/types.h>
 
-/* 守护进程实际启动的二进制路径。 */
-#define PROGRAM_NAME "/home/root/gateway/gateway"
-
 /* 子进程运行信息。 */
 typedef struct SubProcessStruct
 {
     pid_t pid;
     char *name;
+    char *program_path;
     char **args;
 } SubProcess;
 
 /* 初始化子进程信息。 */
-int daemon_process_init(SubProcess *subprocess, const char *name);
+int daemon_process_init(SubProcess *subprocess, const char *program_path, const char *name);
 
 /* 启动子进程。 */
 int daemon_process_start(SubProcess *subprocess);

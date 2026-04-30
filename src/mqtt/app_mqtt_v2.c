@@ -102,7 +102,7 @@ static int message_arrived(void *context, char *topicName, int topicLen,
         client->on_message(client, topicName, message->payload, message->payloadlen);
     }
     
-    // 释放Paho库分配的资源
+    // 释放 Paho 库分配的消息资源。
     MQTTClient_freeMessage(&message);
     MQTTClient_free(topicName);
     return 1;
@@ -118,7 +118,7 @@ static int message_arrived(void *context, char *topicName, int topicLen,
  */
 static void delivery_complete(void *context, MQTTClient_deliveryToken dt)
 {
-    (void)context;  // 避免未使用警告
+    (void)context;  // 避免未使用参数告警。
     (void)dt;
 }
 
@@ -136,10 +136,10 @@ static int calculate_reconnect_delay(MqttClient *client)
     MqttInternal *internal = (MqttInternal *)client->internal;
     int delay = internal->reconnect_delay;
     
-    // 指数退避：延迟翻倍
+    // 指数退避：每次失败后延迟翻倍。
     internal->reconnect_delay *= 2;
     
-    // 限制最大延迟
+    // 限制最大延迟，避免等待时间无限增长。
     if (internal->reconnect_delay > client->config.reconnect_max_interval) {
         internal->reconnect_delay = client->config.reconnect_max_interval;
     }
@@ -160,11 +160,11 @@ static int do_reconnect(MqttClient *client)
     MqttInternal *internal = (MqttInternal *)client->internal;
     MQTTClient_connectOptions opts = MQTTClient_connectOptions_initializer;
     
-    // 设置连接选项
+    // 设置连接选项。
     opts.keepAliveInterval = client->config.keepalive_interval;
     opts.cleansession = client->config.clean_session;
     
-    // 设置用户名密码（如果有）
+    // 设置用户名/密码（若配置存在）。
     if (client->config.username[0]) {
         opts.username = client->config.username;
     }
@@ -172,21 +172,21 @@ static int do_reconnect(MqttClient *client)
         opts.password = client->config.password;
     }
     
-    opts.reliable = 1;          // 可靠传输
-    opts.connectTimeout = 10;   // 连接超时10秒
+    opts.reliable = 1;          // 可靠传输。
+    opts.connectTimeout = 10;   // 连接超时 10 秒。
     
-    // 尝试连接
+    // 尝试连接。
     int rc = MQTTClient_connect(internal->mqtt_client, &opts);
     
     if (rc == MQTTCLIENT_SUCCESS) {
-        // 连接成功
+        // 连接成功后重置重连状态。
         client->state = MQTT_STATE_CONNECTED;
-        client->reconnect_attempts = 0;  // 重置重连计数
+        client->reconnect_attempts = 0;
         internal->reconnect_delay = client->config.reconnect_min_interval;
         
         log_info("MQTT reconnected successfully");
         
-        // 触发回调
+        // 触发连接成功与状态变化回调。
         if (client->on_connected) {
             client->on_connected(client);
         }
@@ -215,14 +215,14 @@ void mqtt_loop(MqttClient *client)
     MqttInternal *internal = (MqttInternal *)client->internal;
     
     while (internal->running) {
-        // 获取当前连接状态
+        // 读取当前连接状态。
         pthread_mutex_lock(&internal->lock);
         MqttState state = client->state;
         pthread_mutex_unlock(&internal->lock);
         
-        // 处理断开状态下的自动重连
+        // 处理断开状态下的自动重连逻辑。
         if (state == MQTT_STATE_DISCONNECTED && client->config.auto_reconnect) {
-            // 检查是否达到最大重连次数
+            // 检查是否达到最大重连次数。
             if (client->config.reconnect_max_attempts > 0 &&
                 client->reconnect_attempts >= client->config.reconnect_max_attempts) {
                 
@@ -235,15 +235,15 @@ void mqtt_loop(MqttClient *client)
                 if (client->on_state_changed) {
                     client->on_state_changed(client, MQTT_STATE_FAILED);
                 }
-                break;  // 退出循环
+                break;  // 达到上限后退出循环。
             }
             
-            // 检查是否到达重连时间
+            // 检查是否到达下一次重连时间点。
             time_t now = time(NULL);
             int delay = calculate_reconnect_delay(client);
             
             if (now - internal->last_reconnect_time >= delay) {
-                // 更新状态为重连中
+                // 更新状态为重连中。
                 pthread_mutex_lock(&internal->lock);
                 client->state = MQTT_STATE_RECONNECTING;
                 pthread_mutex_unlock(&internal->lock);
@@ -257,12 +257,12 @@ void mqtt_loop(MqttClient *client)
                 
                 log_info("MQTT reconnecting (attempt %d)...", client->reconnect_attempts);
                 
-                // 执行重连
+                // 执行重连。
                 do_reconnect(client);
             }
         }
         
-        // 等待100ms后继续循环
+        // 睡眠 100ms，避免循环空转。
         usleep(100000);
     }
 }
@@ -291,33 +291,33 @@ int mqtt_init(MqttClient *client, const MqttConfig *config)
 {
     if (!client) return -1;
     
-    // 清零结构体
+    // 清零结构体。
     memset(client, 0, sizeof(MqttClient));
     
-    // 加载配置
+    // 加载配置。
     if (config) {
         memcpy(&client->config, config, sizeof(MqttConfig));
     } else {
-        // 使用统一默认配置
+        // 使用默认配置。
         mqtt_fill_default_config(&client->config);
     }
     
-    // 分配内部结构
+    // 分配内部状态结构。
     MqttInternal *internal = calloc(1, sizeof(MqttInternal));
     if (!internal) return -1;
     
-    // 初始化互斥锁
+    // 初始化互斥锁。
     pthread_mutex_init(&internal->lock, NULL);
     internal->reconnect_delay = client->config.reconnect_min_interval;
     
     client->internal = internal;
     client->state = MQTT_STATE_DISCONNECTED;
     
-    // 创建Paho MQTT客户端
+    // 创建 Paho MQTT 客户端。
     int rc = MQTTClient_create(&internal->mqtt_client,
                                client->config.broker_url,
                                client->config.client_id,
-                               MQTTCLIENT_PERSISTENCE_NONE, NULL);  // 无持久化
+                               MQTTCLIENT_PERSISTENCE_NONE, NULL);  // 不启用库内持久化。
     if (rc != MQTTCLIENT_SUCCESS) {
         log_error("Failed to create MQTT client: %d", rc);
         pthread_mutex_destroy(&internal->lock);
@@ -325,7 +325,7 @@ int mqtt_init(MqttClient *client, const MqttConfig *config)
         return -1;
     }
     
-    // 设置回调函数
+    // 注册连接/消息/投递回调。
     MQTTClient_setCallbacks(internal->mqtt_client, client,
                            connection_lost, message_arrived, delivery_complete);
     
@@ -346,13 +346,13 @@ int mqtt_init_default(MqttClient *client, const char *broker_url, const char *cl
     MqttConfig config;
     mqtt_fill_default_config(&config);
     
-    // 设置Broker地址
+    // 覆盖 Broker 地址。
     if (broker_url) {
         strncpy(config.broker_url, broker_url, sizeof(config.broker_url) - 1);
         config.broker_url[sizeof(config.broker_url) - 1] = '\0';
     }
     
-    // 设置客户端ID
+    // 覆盖客户端 ID。
     if (client_id) {
         strncpy(config.client_id, client_id, sizeof(config.client_id) - 1);
         config.client_id[sizeof(config.client_id) - 1] = '\0';
@@ -372,7 +372,7 @@ void mqtt_destroy(MqttClient *client)
 {
     if (!client) return;
     
-    // 先停止客户端
+    // 先停止客户端线程与连接。
     mqtt_stop(client);
     
     MqttInternal *internal = (MqttInternal *)client->internal;
@@ -398,7 +398,7 @@ int mqtt_connect(MqttClient *client)
     
     MqttInternal *internal = (MqttInternal *)client->internal;
     
-    // 更新状态为连接中
+    // 更新状态为连接中。
     pthread_mutex_lock(&internal->lock);
     client->state = MQTT_STATE_CONNECTING;
     pthread_mutex_unlock(&internal->lock);
@@ -407,12 +407,12 @@ int mqtt_connect(MqttClient *client)
         client->on_state_changed(client, MQTT_STATE_CONNECTING);
     }
     
-    // 设置连接选项
+    // 设置连接选项。
     MQTTClient_connectOptions opts = MQTTClient_connectOptions_initializer;
     opts.keepAliveInterval = client->config.keepalive_interval;
     opts.cleansession = client->config.clean_session;
     
-    // 设置认证信息
+    // 设置认证信息（若配置存在）。
     if (client->config.username[0]) {
         opts.username = client->config.username;
     }
@@ -423,11 +423,11 @@ int mqtt_connect(MqttClient *client)
     opts.reliable = 1;
     opts.connectTimeout = 10;
     
-    // 执行连接
+    // 执行连接。
     int rc = MQTTClient_connect(internal->mqtt_client, &opts);
     
     if (rc == MQTTCLIENT_SUCCESS) {
-        // 连接成功
+        // 连接成功。
         pthread_mutex_lock(&internal->lock);
         client->state = MQTT_STATE_CONNECTED;
         internal->reconnect_delay = client->config.reconnect_min_interval;
@@ -435,7 +435,7 @@ int mqtt_connect(MqttClient *client)
         
         log_info("MQTT connected to %s", client->config.broker_url);
         
-        // 触发回调
+        // 触发连接成功与状态变化回调。
         if (client->on_connected) {
             client->on_connected(client);
         }
@@ -446,7 +446,7 @@ int mqtt_connect(MqttClient *client)
         return 0;
     }
     
-    // 连接失败
+    // 连接失败。
     pthread_mutex_lock(&internal->lock);
     client->state = MQTT_STATE_FAILED;
     pthread_mutex_unlock(&internal->lock);
@@ -471,21 +471,21 @@ void mqtt_disconnect(MqttClient *client)
     
     MqttInternal *internal = (MqttInternal *)client->internal;
     
-    // 只在已连接或正在连接时才调用disconnect
+    // 仅在已连接或连接中状态执行 disconnect，避免重复调用。
     if (client->state == MQTT_STATE_CONNECTED || 
         client->state == MQTT_STATE_CONNECTING ||
         client->state == MQTT_STATE_RECONNECTING) {
         MQTTClient_disconnect(internal->mqtt_client, 5000);  // 5秒超时
     }
     
-    // 更新状态
+    // 更新状态为断开。
     pthread_mutex_lock(&internal->lock);
     client->state = MQTT_STATE_DISCONNECTED;
     pthread_mutex_unlock(&internal->lock);
     
     log_info("MQTT disconnected");
     
-    // 触发回调
+    // 触发断开与状态变化回调。
     if (client->on_disconnected) {
         client->on_disconnected(client);
     }
@@ -543,7 +543,7 @@ int mqtt_publish(MqttClient *client, const char *topic,
 {
     if (!client || !client->internal || !topic || !payload) return -1;
     
-    // 检查连接状态
+    // 检查连接状态。
     if (!mqtt_is_connected(client)) {
         log_warn("MQTT not connected, cannot publish");
         return -1;
@@ -551,19 +551,19 @@ int mqtt_publish(MqttClient *client, const char *topic,
     
     MqttInternal *internal = (MqttInternal *)client->internal;
     
-    // 构建消息
+    // 构建待发布消息。
     MQTTClient_message pubmsg = MQTTClient_message_initializer;
     pubmsg.payload = (void *)payload;
     pubmsg.payloadlen = len;
     pubmsg.qos = qos;
-    pubmsg.retained = 0;  // 不保留消息
+    pubmsg.retained = 0;  // 不保留消息。
     
-    // 发布消息
+    // 发布消息。
     MQTTClient_deliveryToken token;
     int rc = MQTTClient_publishMessage(internal->mqtt_client, topic, &pubmsg, &token);
     
     if (rc == MQTTCLIENT_SUCCESS) {
-        // 服务质量等级大于0时等待交付完成
+        // QoS>0 时等待 Broker 交付完成。
         if (qos > MQTT_QOS_0) {
             MQTTClient_waitForCompletion(internal->mqtt_client, token, 5000);
         }
@@ -605,7 +605,7 @@ int mqtt_subscribe(MqttClient *client, const char *topic, MqttQos qos)
 {
     if (!client || !client->internal || !topic) return -1;
     
-    // 检查连接状态
+    // 检查连接状态。
     if (!mqtt_is_connected(client)) {
         log_warn("MQTT not connected, cannot subscribe");
         return -1;
@@ -613,7 +613,7 @@ int mqtt_subscribe(MqttClient *client, const char *topic, MqttQos qos)
     
     MqttInternal *internal = (MqttInternal *)client->internal;
     
-    // 执行订阅
+    // 执行订阅。
     int rc = MQTTClient_subscribe(internal->mqtt_client, topic, qos);
     
     if (rc == MQTTCLIENT_SUCCESS) {
@@ -693,19 +693,19 @@ int mqtt_start(MqttClient *client)
     
     MqttInternal *internal = (MqttInternal *)client->internal;
     
-    // 检查是否已启动
+    // 检查是否已启动。
     if (internal->running) return 0;
     
-    // 尝试连接
+    // 尝试连接。
     if (mqtt_connect(client) != 0) {
-        // 连接失败，但启动后台线程进行重连
+        // 初次连接失败时，仍启动后台线程持续重连。
         log_warn("MQTT initial connection failed, will retry in background");
     }
     
     internal->running = 1;
     internal->last_reconnect_time = time(NULL);
     
-    // 创建后台线程
+    // 创建后台线程。
     if (pthread_create(&internal->thread, NULL, mqtt_thread_func, client) != 0) {
         log_error("Failed to create MQTT thread");
         internal->running = 0;
@@ -730,18 +730,18 @@ void mqtt_stop(MqttClient *client)
     MqttInternal *internal = (MqttInternal *)client->internal;
     
     if (!internal->running) {
-        // 即使没有运行，也需要断开连接
+        // 即使线程未运行，也需要确保连接断开。
         mqtt_disconnect(client);
         return;
     }
     
     log_info("Stopping MQTT client...");
     
-    // 停止后台线程
+    // 停止后台线程。
     internal->running = 0;
     pthread_join(internal->thread, NULL);
     
-    // 断开连接
+    // 断开连接。
     mqtt_disconnect(client);
     
     log_info("MQTT client stopped");

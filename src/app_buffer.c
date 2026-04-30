@@ -134,13 +134,13 @@ int app_buffer_peek(Buffer *buffer, void *buf, int len)
 
     pthread_mutex_lock(&buffer->lock);
     
-    // 限制窥探长度不超过可用数据
+    // 限制窥探长度不超过可用数据。
     if (len > buffer->len)
     {
         len = buffer->len;
     }
     
-    // 无数据可窥探
+    // 无数据可窥探。
     if (len == 0)
     {
         pthread_mutex_unlock(&buffer->lock);
@@ -149,7 +149,7 @@ int app_buffer_peek(Buffer *buffer, void *buf, int len)
 
     app_buffer_copy_from_ring(buffer, buffer->start, buf, len);
     
-    // 注意：不更新start和len，保持原状态
+    // 注意：窥探不改变 start/len，缓冲区状态保持不变。
 
     pthread_mutex_unlock(&buffer->lock);
     return len;
@@ -175,7 +175,7 @@ int app_buffer_write(Buffer *buffer, void *buf, int len)
     
     pthread_mutex_lock(&buffer->lock);
     
-    // 检查剩余空间是否足够
+    // 检查剩余空间是否足够。
     if (len > buffer->size - buffer->len)
     {
         pthread_mutex_unlock(&buffer->lock);
@@ -183,30 +183,30 @@ int app_buffer_write(Buffer *buffer, void *buf, int len)
         return -1;
     }
 
-    // 计算写入位置（start + len）
+    // 计算写入位置（start + len）。
     int write_offset = buffer->start + buffer->len;
     
-    // 处理回绕
+    // 处理回绕。
     if (write_offset >= buffer->size)
     {
         write_offset -= buffer->size;
     }
 
-    // 处理两种情况：连续写入和回绕写入
+    // 处理两种情况：连续写入和回绕写入。
     if (write_offset + len <= buffer->size)
     {
-        // 情况1：写入位置到末尾有足够空间，无需回绕
+        // 情况1：写入位置到末尾有足够空间，无需回绕。
         memcpy(buffer->ptr + write_offset, buf, len);
     }
     else
     {
-        // 情况2：需要分两段写入（跨越缓冲区末尾）
-        int first_len = buffer->size - write_offset;  // 第一段可写入长度
-        memcpy(buffer->ptr + write_offset, buf, first_len);         // 写入第一段
-        memcpy(buffer->ptr, buf + first_len, len - first_len);      // 写入第二段（从头开始）
+        // 情况2：需要分两段写入（跨越缓冲区末尾）。
+        int first_len = buffer->size - write_offset;  // 第一段可写入长度。
+        memcpy(buffer->ptr + write_offset, buf, first_len);         // 写入第一段。
+        memcpy(buffer->ptr, buf + first_len, len - first_len);      // 写入第二段（从头开始）。
     }
     
-    // 更新数据长度
+    // 更新数据长度。
     buffer->len += len;
     
     pthread_mutex_unlock(&buffer->lock);
@@ -225,17 +225,17 @@ void app_buffer_close(Buffer *buffer)
 {
     if (!buffer) return;
     
-    // 释放缓冲区内存
+    // 释放缓冲区内存。
     if (buffer->ptr)
     {
         free(buffer->ptr);
         buffer->ptr = NULL;
     }
 
-    // 销毁互斥锁
+    // 销毁互斥锁。
     pthread_mutex_destroy(&buffer->lock);
 
-    // 重置状态
+    // 重置状态。
     buffer->size = 0;
     buffer->len = 0;
     buffer->start = 0;

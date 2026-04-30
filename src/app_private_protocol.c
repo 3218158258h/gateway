@@ -45,6 +45,9 @@ void app_private_protocol_load_defaults(PrivateProtocolConfig *config)
     snprintf(config->init_cmds[2], APP_PRIVATE_PROTOCOL_INIT_CMD_MAX_LEN, "%s", "AT+BAUD{baud_code}\r\n");
     snprintf(config->init_cmds[3], APP_PRIVATE_PROTOCOL_INIT_CMD_MAX_LEN, "%s", "AT+RESET\r\n");
     config->init_cmds_count = 4;
+    snprintf(config->m_addr, sizeof(config->m_addr), "%s", "0001");
+    snprintf(config->net_id, sizeof(config->net_id), "%s", "1111");
+    config->work_baud = 115200;
 }
 
 int app_private_protocol_parse_hex_bytes(const char *hex, unsigned char *out, int max_len, int *out_len)

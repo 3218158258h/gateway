@@ -31,6 +31,8 @@ BASE_SRCS = $(SRC_DIR)/app_config.c \
             $(SRC_DIR)/app_device.c \
             $(SRC_DIR)/app_device_layer.c \
             $(SRC_DIR)/app_link_adapter.c \
+            $(SRC_DIR)/app_iface_i2c.c \
+            $(SRC_DIR)/app_iface_spi.c \
             $(SRC_DIR)/app_message.c \
             $(SRC_DIR)/app_persistence.c \
             $(SRC_DIR)/app_private_protocol.c \
@@ -40,6 +42,7 @@ BASE_SRCS = $(SRC_DIR)/app_config.c \
             $(SRC_DIR)/app_serial.c \
             $(SRC_DIR)/app_task.c \
             $(SRC_DIR)/daemon/daemon_process.c \
+            $(SRC_DIR)/daemon/daemon_config.c \
             $(SRC_DIR)/daemon/daemon_runner.c
 
 # 源文件 - MQTT模块

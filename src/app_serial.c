@@ -5,7 +5,9 @@
 #include <unistd.h>
 #include <string.h>
 #include <strings.h>
+#include <stdlib.h>
 
+/* 传输配置默认值：作为配置文件缺失时的兜底。 */
 void app_transport_config_init(SerialDevice *serial_device)
 {
     if (!serial_device) {
@@ -17,10 +19,12 @@ void app_transport_config_init(SerialDevice *serial_device)
     serial_device->transport.uart.stop_bits = STOP_BITS_ONE;
     serial_device->transport.uart.parity = PARITY_NONE;
     serial_device->transport.uart.block_mode = 0;
+    serial_device->transport.i2c.register_addr_width = 1;
 }
 
 AppInterfaceType app_transport_string_to_interface(const char *interface_name)
 {
+    /* 历史兼容：serial 和 uart 等价。 */
     if (!interface_name || interface_name[0] == '\0' ||
         strcasecmp(interface_name, "serial") == 0 ||
         strcasecmp(interface_name, "uart") == 0) {
@@ -134,15 +138,34 @@ int app_transport_config_load(SerialDevice *serial_device, const char *config_fi
         &cfg_mgr, section_name, "lsb_first", serial_device->transport.spi.lsb_first);
     serial_device->transport.spi.chip_select = (unsigned int)config_get_int(
         &cfg_mgr, section_name, "chip_select", (int)serial_device->transport.spi.chip_select);
+    serial_device->transport.spi.poll_interval_ms = config_get_int(
+        &cfg_mgr, section_name, "poll_interval_ms", serial_device->transport.spi.poll_interval_ms);
+    serial_device->transport.spi.transfer_len = (unsigned int)config_get_int(
+        &cfg_mgr, section_name, "transfer_len", (int)serial_device->transport.spi.transfer_len);
 
     serial_device->transport.i2c.bus_speed_hz = (unsigned int)config_get_int(
         &cfg_mgr, section_name, "bus_speed_hz", (int)serial_device->transport.i2c.bus_speed_hz);
-    serial_device->transport.i2c.address = (unsigned short)config_get_int(
-        &cfg_mgr, section_name, "address", serial_device->transport.i2c.address);
+    /* address 支持十进制和 0x 前缀十六进制。 */
+    if (config_get_string(&cfg_mgr, section_name, "address", "", value, sizeof(value)) == 0 &&
+        value[0] != '\0') {
+        char *endptr = NULL;
+        unsigned long parsed = strtoul(value, &endptr, 0);
+        if (endptr != value && *endptr == '\0' && parsed <= 0x3FFUL) {
+            serial_device->transport.i2c.address = (unsigned short)parsed;
+        }
+    }
     serial_device->transport.i2c.ten_bit_address = config_get_bool(
         &cfg_mgr, section_name, "ten_bit_address", serial_device->transport.i2c.ten_bit_address);
     serial_device->transport.i2c.clock_stretching = config_get_bool(
         &cfg_mgr, section_name, "clock_stretching", serial_device->transport.i2c.clock_stretching);
+    serial_device->transport.i2c.poll_interval_ms = config_get_int(
+        &cfg_mgr, section_name, "poll_interval_ms", serial_device->transport.i2c.poll_interval_ms);
+    serial_device->transport.i2c.register_addr = (unsigned short)config_get_int(
+        &cfg_mgr, section_name, "register_addr", serial_device->transport.i2c.register_addr);
+    serial_device->transport.i2c.register_addr_width = config_get_int(
+        &cfg_mgr, section_name, "register_addr_width", serial_device->transport.i2c.register_addr_width);
+    serial_device->transport.i2c.read_len = (unsigned int)config_get_int(
+        &cfg_mgr, section_name, "read_len", (int)serial_device->transport.i2c.read_len);
 
     config_destroy(&cfg_mgr);
     return 0;
@@ -188,7 +211,10 @@ static int app_serial_setRaw(SerialDevice *serial_device)
 int app_serial_init(SerialDevice *serial_device, char *filename)
 {
     if (!serial_device || !filename) return -1;
-    app_transport_config_load(serial_device, APP_PHYSICAL_TRANSPORT_CONFIG_FILE, "transport.serial_default");
+    /* 若上层未提前装载物理配置，则先读取串口默认节。 */
+    if (serial_device->transport.device_path[0] == '\0') {
+        app_transport_config_load(serial_device, APP_PHYSICAL_TRANSPORT_CONFIG_FILE, "transport.serial_default");
+    }
     serial_device->transport.interface_type = APP_INTERFACE_SERIAL;
     snprintf(serial_device->transport.device_path, sizeof(serial_device->transport.device_path), "%s", filename);
 
@@ -270,12 +296,13 @@ int app_serial_setBlockMode(SerialDevice *serial_device, int block_mode)
 
     if (block_mode)
     {
+        /* 阻塞模式：至少读到 1 字节才返回。 */
         options.c_cc[VTIME] = 0;
         options.c_cc[VMIN] = 1;
     }
     else
     {
-        // VTIME单位为0.1秒，因此VTIME=5表示0.5秒
+        // VTIME 单位为 0.1 秒，因此 VTIME=5 表示 0.5 秒。
         options.c_cc[VTIME] = 5;
         options.c_cc[VMIN] = 0;
     }

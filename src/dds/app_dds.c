@@ -198,7 +198,7 @@ int dds_init(DdsManager *manager, const DdsConfig *config)
         return -1;
     }
     
-    // 创建DDS参与者
+    // 创建 DDS 参与者。
     internal->participant = dds_create_participant(
         manager->config.domain_id, NULL, NULL);
     
@@ -287,7 +287,7 @@ int dds_register_topic(DdsManager *manager, const DdsTopic *topic)
         desc = (dds_topic_descriptor_t*)&Gateway_CommandType_desc;
     }
     
-    // 创建DDS话题
+    // 创建 DDS 话题。
     if (desc) {
         info->topic = dds_create_topic(internal->participant, desc, topic->name, NULL, NULL);
         if (info->topic < 0) {
@@ -330,7 +330,7 @@ int dds_unregister_topic(DdsManager *manager, const char *topic_name)
     for (int i = 0; i < internal->topic_count; i++) {
         if (strcmp(internal->topics[i].name, topic_name) == 0) {
 #if DDS_ENABLED
-            // 删除DDS实体
+            // 删除 DDS 实体。
             if (internal->topics[i].writer) {
                 dds_delete(internal->topics[i].writer);
             }
@@ -452,7 +452,7 @@ int dds_publish(DdsManager *manager, const char *topic_name,
         }
     }
     
-    // 封装数据到IDL结构体
+    // 封装数据到 IDL 结构体。
     Gateway_DataType msg;
     memset(&msg, 0, sizeof(msg));
     msg.length = (len > MAX_DATA_LEN) ? MAX_DATA_LEN : (uint32_t)len; 
@@ -468,7 +468,7 @@ int dds_publish(DdsManager *manager, const char *topic_name,
     log_trace("DDS published to %s: %zu bytes", topic_name, len);
     return 0;
 #else
-    // DDS未启用时的桩函数
+    // DDS 未启用时的桩函数。
     log_trace("DDS publish (stub): topic=%s, len=%zu", topic_name, len);
     return 0;
 #endif
@@ -667,7 +667,7 @@ int dds_register_default_topics(DdsManager *manager)
         strncpy(topic.name, cfg->default_publish_topic, sizeof(topic.name) - 1);
         strncpy(topic.type_name, cfg->default_publish_type[0] ? 
                 cfg->default_publish_type : "GatewayData", sizeof(topic.type_name) - 1);
-        topic.qos = dds_qos_reliable();  // 使用可靠QoS
+        topic.qos = dds_qos_reliable();  // 使用可靠 QoS。
         
         if (dds_register_topic(manager, &topic) != 0) {
             log_warn("Failed to register DDS publish topic: %s", topic.name);
@@ -683,7 +683,7 @@ int dds_register_default_topics(DdsManager *manager)
         strncpy(topic.name, cfg->default_subscribe_topic, sizeof(topic.name) - 1);
         strncpy(topic.type_name, cfg->default_subscribe_type[0] ? 
                 cfg->default_subscribe_type : "GatewayCommand", sizeof(topic.type_name) - 1);
-        topic.qos = dds_qos_reliable();  // 使用可靠QoS
+        topic.qos = dds_qos_reliable();  // 使用可靠 QoS。
         
         if (dds_register_topic(manager, &topic) != 0) {
             log_warn("Failed to register DDS subscribe topic: %s", topic.name);

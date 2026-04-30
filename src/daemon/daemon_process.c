@@ -5,12 +5,13 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <string.h>
+#include <errno.h>
 
 /* 初始化子进程结构体。 */
-int daemon_process_init(SubProcess *subprocess, const char *name)
+int daemon_process_init(SubProcess *subprocess, const char *program_path, const char *name)
 {
     /* 参数合法性校验：子进程结构体指针或名称为空则返回失败。 */
-    if (!subprocess || !name) return -1;
+    if (!subprocess || !program_path || !name) return -1;
     
     /* 将子进程结构体内存清零，避免脏数据。 */
     memset(subprocess, 0, sizeof(SubProcess));
@@ -39,11 +40,23 @@ int daemon_process_init(SubProcess *subprocess, const char *name)
 
     /* 将子进程名称拷贝到分配的内存中。 */
     memcpy(subprocess->name, name, name_len);
+
+    size_t path_len = strlen(program_path) + 1;
+    subprocess->program_path = malloc(path_len);
+    if (!subprocess->program_path) {
+        log_error("Failed to allocate memory for subprocess program path");
+        free(subprocess->name);
+        subprocess->name = NULL;
+        free(subprocess->args);
+        subprocess->args = NULL;
+        return -1;
+    }
+    memcpy(subprocess->program_path, program_path, path_len);
     /* 初始化 PID 为 -1，表示子进程未运行。 */
     subprocess->pid = -1;
 
     /* 构造子进程启动参数。 */
-    subprocess->args[0] = PROGRAM_NAME;
+    subprocess->args[0] = subprocess->program_path;
     subprocess->args[1] = subprocess->name;
     subprocess->args[2] = NULL;
     return 0;
@@ -58,7 +71,9 @@ int daemon_process_init(SubProcess *subprocess, const char *name)
 int daemon_process_start(SubProcess *subprocess)
 {
     // 参数合法性校验：子进程结构体指针为空则返回失败
-    if (!subprocess) return -1;
+    if (!subprocess || !subprocess->program_path || !subprocess->name || !subprocess->args) {
+        return -1;
+    }
     
     // 记录启动子进程的日志
     log_info("Starting subprocess %s", subprocess->name);
@@ -74,9 +89,10 @@ int daemon_process_start(SubProcess *subprocess)
     {
         // 替换子进程镜像，执行目标程序
         // 参数：程序路径、启动参数、环境变量
-        if (execve(PROGRAM_NAME, subprocess->args, __environ) < 0)
+        if (execv(subprocess->program_path, subprocess->args) < 0)
         {
-            log_error("Failed to execve subprocess %s", subprocess->name);
+            log_error("Failed to execv subprocess %s, program=%s errno=%s",
+                      subprocess->name, subprocess->program_path, strerror(errno));
             exit(EXIT_FAILURE);  // 执行失败则退出子进程
         }
     }
@@ -108,6 +124,10 @@ int daemon_process_stop(SubProcess *subprocess)
     // 向子进程发送SIGTERM信号，请求优雅退出
     if (kill(subprocess->pid, SIGTERM) < 0)
     {
+        if (errno == ESRCH) {
+            subprocess->pid = -1;
+            return 0;
+        }
         log_error("Failed to send SIGTERM to subprocess %s", subprocess->name);
         return -1;
     }
@@ -116,6 +136,10 @@ int daemon_process_stop(SubProcess *subprocess)
     int status;
     if (waitpid(subprocess->pid, &status, 0) < 0)
     {
+        if (errno == ECHILD) {
+            subprocess->pid = -1;
+            return 0;
+        }
         log_error("Failed to wait for subprocess %s", subprocess->name);
         return -1;
     }
@@ -144,6 +168,10 @@ void daemon_process_free(SubProcess *subprocess)
     if (subprocess->name) {
         free(subprocess->name);
         subprocess->name = NULL;
+    }
+    if (subprocess->program_path) {
+        free(subprocess->program_path);
+        subprocess->program_path = NULL;
     }
     // 重置PID为-1，标记进程未运行
     subprocess->pid = -1;

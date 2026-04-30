@@ -48,15 +48,15 @@ typedef struct {
 
 /* OTA 状态字符串数组，用于日志输出。 */
 static const char *state_strings[] = {
-    "IDLE",        // 空闲
-    "CHECKING",    // 检查更新中
-    "DOWNLOADING", // 下载中
-    "VERIFYING",   // 验证中
-    "INSTALLING",  // 安装中
-    "REBOOTING",   // 重启中
-    "SUCCESS",     // 成功
-    "FAILED",      // 失败
-    "ROLLBACK"     // 回滚中
+    "IDLE",        // 空闲。
+    "CHECKING",    // 检查更新中。
+    "DOWNLOADING", // 下载中。
+    "VERIFYING",   // 验证中。
+    "INSTALLING",  // 安装中。
+    "REBOOTING",   // 重启中。
+    "SUCCESS",     // 成功。
+    "FAILED",      // 失败。
+    "ROLLBACK"     // 回滚中。
 };
 
 /* 获取 OTA 状态字符串。 */
@@ -70,15 +70,15 @@ const char *ota_statestr(OtaState state)
 
 /* OTA 错误字符串数组，用于错误信息输出。 */
 static const char *error_strings[] = {
-    "OK",                          // 成功
-    "Network error",               // 网络错误
-    "Download failed",             // 下载失败
-    "Checksum error",              // 校验和错误
-    "Signature verification failed", // 签名验证失败
-    "Write error",                 // 写入错误
-    "Boot error",                  // 启动错误
-    "Rollback failed",             // 回滚失败
-    "Invalid parameter"            // 无效参数
+    "OK",                          // 成功。
+    "Network error",               // 网络错误。
+    "Download failed",             // 下载失败。
+    "Checksum error",              // 校验和错误。
+    "Signature verification failed", // 签名验证失败。
+    "Write error",                 // 写入错误。
+    "Boot error",                  // 启动错误。
+    "Rollback failed",             // 回滚失败。
+    "Invalid parameter"            // 无效参数。
 };
 
 /**
@@ -109,19 +109,19 @@ static int calculate_sha256(const char *file_path, uint8_t *hash)
         return -1;
     }
     
-    // 初始化SHA256上下文
+    // 初始化 SHA256 上下文。
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
     
     uint8_t buffer[4096];
     size_t len;
     
-    // 分块读取文件并更新哈希
+    // 分块读取文件并更新哈希。
     while ((len = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
         SHA256_Update(&ctx, buffer, len);
     }
     
-    // 计算最终哈希值
+    // 计算最终哈希值。
     SHA256_Final(hash, &ctx);
     fclose(fp);
     
@@ -140,13 +140,13 @@ static int calculate_sha256(const char *file_path, uint8_t *hash)
 static int verify_signature(const char *file_path, const char *sig_path,
                             const char *pub_key_path)
 {
-    // 计算固件文件的SHA256哈希
+    // 计算固件文件的 SHA256 哈希。
     uint8_t hash[SHA256_DIGEST_LENGTH];
     if (calculate_sha256(file_path, hash) != 0) {
         return -1;
     }
     
-    // 读取签名文件
+    // 读取签名文件。
     FILE *sig_fp = fopen(sig_path, "rb");
     if (!sig_fp) {
         log_error("Failed to open signature file");
@@ -157,7 +157,7 @@ static int verify_signature(const char *file_path, const char *sig_path,
     size_t sig_len = fread(signature, 1, sizeof(signature), sig_fp);
     fclose(sig_fp);
     
-    // 读取公钥文件
+    // 读取公钥文件。
     FILE *pub_fp = fopen(pub_key_path, "r");
     if (!pub_fp) {
         log_error("Failed to open public key file");
@@ -172,7 +172,7 @@ static int verify_signature(const char *file_path, const char *sig_path,
         return -1;
     }
     
-    // 使用RSA公钥验证签名
+    // 使用 RSA 公钥验证签名。
     int ret = RSA_verify(NID_sha256, hash, SHA256_DIGEST_LENGTH,
                         signature, sig_len, rsa);
     
@@ -210,7 +210,7 @@ static int read_boot_config(const char *path, BootConfig *config)
         return -1;
     }
     
-    // 验证魔数，确保配置文件有效
+    // 验证魔数，确保配置文件有效。
     if (config->magic != BOOT_CONFIG_MAGIC) {
         log_error("Invalid boot config magic");
         return -1;
@@ -233,11 +233,11 @@ static int write_boot_config(const char *path, BootConfig *config)
         return -1;
     }
     
-    // 设置魔数和版本
+    // 设置魔数和版本。
     config->magic = BOOT_CONFIG_MAGIC;
     config->version = BOOT_CONFIG_VERSION;
     
-    // 计算校验和（简单累加和）
+    // 计算校验和（简单累加和）。
     config->checksum = 0;
     uint8_t *p = (uint8_t *)config;
     uint32_t sum = 0;
@@ -286,10 +286,10 @@ static int progress_callback(void *userdata, curl_off_t dltotal, curl_off_t dlno
 {
     OtaManager *manager = (OtaManager *)userdata;
     
-    // 计算下载进度百分比
+    // 计算下载进度百分比。
     if (dltotal > 0) {
         manager->download_progress = (int)(dlnow * 100 / dltotal);
-        // 调用进度回调
+        // 调用进度回调。
         if (manager->on_progress) {
             manager->on_progress(manager, manager->download_progress);
         }
@@ -309,14 +309,14 @@ int ota_init(OtaManager *manager, const OtaConfig *config)
 {
     if (!manager) return -1;
     
-    // 清零管理器结构体
+    // 清零管理器结构体。
     memset(manager, 0, sizeof(OtaManager));
     
-    // 加载配置
+    // 加载配置。
     if (config) {
         memcpy(&manager->config, config, sizeof(OtaConfig));
     } else {
-        // 使用默认配置
+        // 使用默认配置。
         snprintf(manager->config.partition_a, sizeof(manager->config.partition_a), "%s", OTA_CONFIG_PARTITION_A);      // A分区设备
         snprintf(manager->config.partition_b, sizeof(manager->config.partition_b), "%s", OTA_CONFIG_PARTITION_B);      // B分区设备
         snprintf(manager->config.boot_config, sizeof(manager->config.boot_config), "%s", OTA_CONFIG_FILE); // 启动配置文件
@@ -326,20 +326,20 @@ int ota_init(OtaManager *manager, const OtaConfig *config)
         manager->config.auto_rollback = 1;         // 启用自动回滚
     }
     
-    // 初始化A分区信息
-    strncpy(manager->partition_a.name, "A", sizeof(manager->partition_a.name));// A分区名称
-    strncpy(manager->partition_a.device, manager->config.partition_a,// A分区设备
+    // 初始化 A 分区信息。
+    strncpy(manager->partition_a.name, "A", sizeof(manager->partition_a.name)); // A 分区名称。
+    strncpy(manager->partition_a.device, manager->config.partition_a, // A 分区设备。
             sizeof(manager->partition_a.device));
     
-    // 初始化B分区信息
+    // 初始化 B 分区信息。
     strncpy(manager->partition_b.name, "B", sizeof(manager->partition_b.name));
     strncpy(manager->partition_b.device, manager->config.partition_b,
             sizeof(manager->partition_b.device));
     
-    // 读取启动配置，确定当前活跃分区
+    // 读取启动配置，确定当前活跃分区。
     BootConfig boot_cfg;
-    if (read_boot_config(manager->config.boot_config, &boot_cfg) == 0) {// 启动配置有效
-        if (boot_cfg.active_partition == 0) {// A分区为活动分区
+    if (read_boot_config(manager->config.boot_config, &boot_cfg) == 0) { // 启动配置有效。
+        if (boot_cfg.active_partition == 0) { // A 分区为活动分区。
             manager->active_partition = &manager->partition_a;
             manager->inactive_partition = &manager->partition_b;
         } else {
@@ -348,17 +348,17 @@ int ota_init(OtaManager *manager, const OtaConfig *config)
         }
         manager->active_partition->boot_count = boot_cfg.boot_count;
     } else {
-        // 默认使用A分区
+        // 启动配置无效时默认使用 A 分区。
         manager->active_partition = &manager->partition_a;
         manager->inactive_partition = &manager->partition_b;
     }
     
-    // 读取当前版本号
+    // 读取当前版本号。
     FILE *fp = fopen(OTA_CONFIG_VERSION_FILE, "r");
     if (fp) {
         fgets(manager->current_version, sizeof(manager->current_version), fp);
         fclose(fp);
-        // 去除换行符
+        // 去除换行符。
         char *nl = strchr(manager->current_version, '\n');
         if (nl) *nl = '\0';
     }
@@ -411,7 +411,7 @@ int ota_check_update(OtaManager *manager, char *out_version, size_t max_len)
         manager->on_state_changed(manager, OTA_STATE_CHECKING);
     }
     
-    // 初始化CURL
+    // 初始化 CURL。
     CURL *curl = curl_easy_init();
     if (!curl) {
         log_error("Failed to init curl");
@@ -419,38 +419,38 @@ int ota_check_update(OtaManager *manager, char *out_version, size_t max_len)
         return -1;
     }
     
-    // 构建版本文件URL
+    // 构建版本文件 URL。
     char version_url[512];
     snprintf(version_url, sizeof(version_url), "%s/version.txt",
              manager->config.version_url);
     
     // 下载版本信息到临时文件
-    FILE *fp = tmpfile();// 创建临时文件
-    curl_easy_setopt(curl, CURLOPT_URL, version_url);// 设置URL
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);// 设置写入目标
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);// 设置超时时间30秒
+    FILE *fp = tmpfile(); // 创建临时文件。
+    curl_easy_setopt(curl, CURLOPT_URL, version_url); // 设置 URL。
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp); // 设置写入目标。
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L); // 设置超时时间 30 秒。
     
-    CURLcode res = curl_easy_perform(curl);// 执行下载
-    curl_easy_cleanup(curl);// 清理CURL资源
+    CURLcode res = curl_easy_perform(curl); // 执行下载。
+    curl_easy_cleanup(curl); // 清理 CURL 资源。
     
-    if (res != CURLE_OK) {// 检查下载是否成功
+    if (res != CURLE_OK) { // 检查下载是否成功。
         log_error("Failed to fetch version info: %s", curl_easy_strerror(res));
         fclose(fp);
         manager->state = OTA_STATE_FAILED;
         return -1;
     }
     
-    // 读取版本号
-    rewind(fp);// 重置文件指针到开头
+    // 读取版本号。
+    rewind(fp); // 重置文件指针到开头。
     char new_version[64] = {0};
-    fgets(new_version, sizeof(new_version), fp);// 读取版本号
+    fgets(new_version, sizeof(new_version), fp); // 读取版本号。
     fclose(fp);
     
-    // 去除换行符
+    // 去除换行符。
     char *nl = strchr(new_version, '\n');
     if (nl) *nl = '\0';
     
-    // 比较版本号
+    // 比较版本号。
     if (strcmp(new_version, manager->current_version) > 0) {
         strncpy(manager->new_version, new_version, sizeof(manager->new_version) - 1);
         if (out_version && max_len > 0) {
@@ -459,12 +459,12 @@ int ota_check_update(OtaManager *manager, char *out_version, size_t max_len)
         
         log_info("New version available: %s", new_version);
         manager->state = OTA_STATE_IDLE;
-        return 0;  // 有新版本
+        return 0;  // 有新版本。
     }
 
     log_debug("No update available");
     manager->state = OTA_STATE_IDLE;
-    return 1;  // 无新版本
+    return 1;  // 无新版本。
 }
 
 /**
@@ -484,14 +484,14 @@ int ota_download(OtaManager *manager)
         manager->on_state_changed(manager, OTA_STATE_DOWNLOADING);
     }
     
-    // 构建固件下载URL
+    // 构建固件下载 URL。
     char firmware_url[512];
     snprintf(firmware_url, sizeof(firmware_url), "%s/firmware-%s.bin",
              manager->config.firmware_url, manager->new_version);
     
     log_info("Downloading firmware from: %s", firmware_url);
     
-    // 打开临时文件
+    // 打开临时文件。
     char tmp_path[256];
     snprintf(tmp_path, sizeof(tmp_path), "/tmp/firmware-%s.bin", manager->new_version);
     
@@ -502,7 +502,7 @@ int ota_download(OtaManager *manager)
         return -1;
     }
     
-    // 初始化CURL并下载
+    // 初始化 CURL 并下载。
     CURL *curl = curl_easy_init();
     if (!curl) {
         fclose(fp);
@@ -510,20 +510,20 @@ int ota_download(OtaManager *manager)
         return -1;
     }
     
-    // 设置CURL选项
-    curl_easy_setopt(curl, CURLOPT_URL, firmware_url);// 设置URL
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);// 设置写入目标
+    // 设置 CURL 选项。
+    curl_easy_setopt(curl, CURLOPT_URL, firmware_url); // 设置 URL。
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp); // 设置写入目标。
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);  // 进度回调
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, manager); // 传递进度回调参数
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);// 启用进度回调
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L); // 启用进度回调。
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);           // 超时5分钟
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);      // 跟随重定向
     
-    CURLcode res = curl_easy_perform(curl);// 执行下载
+    CURLcode res = curl_easy_perform(curl); // 执行下载。
     curl_easy_cleanup(curl);
     fclose(fp);
     
-    if (res != CURLE_OK) {// 检查下载是否成功
+    if (res != CURLE_OK) { // 检查下载是否成功。
         log_error("Download failed: %s", curl_easy_strerror(res));
         remove(tmp_path);
         manager->state = OTA_STATE_FAILED;
@@ -554,17 +554,17 @@ int ota_verify(OtaManager *manager)
         manager->on_state_changed(manager, OTA_STATE_VERIFYING);
     }
     
-    // 固件文件路径
+    // 固件文件路径。
     char firmware_path[256];
     snprintf(firmware_path, sizeof(firmware_path), "/tmp/firmware-%s.bin",
              manager->new_version);
     
-    // 签名文件路径
+    // 签名文件路径。
     char sig_path[256];
     snprintf(sig_path, sizeof(sig_path), "/tmp/firmware-%s.sig",
              manager->new_version);
     
-    // 下载签名文件
+    // 下载签名文件。
     char sig_url[512];
     snprintf(sig_url, sizeof(sig_url), "%s/firmware-%s.sig",
              manager->config.firmware_url, manager->new_version);
@@ -582,7 +582,7 @@ int ota_verify(OtaManager *manager)
         curl_easy_cleanup(curl);
     }
     
-    // 验证RSA签名
+    // 验证 RSA 签名。
     if (verify_signature(firmware_path, sig_path,
                         manager->config.public_key_path) != 0) {
         log_error("Signature verification failed");
@@ -615,12 +615,12 @@ int ota_install(OtaManager *manager)
         manager->on_state_changed(manager, OTA_STATE_INSTALLING);
     }
     
-    // 固件文件路径
+    // 固件文件路径。
     char firmware_path[256];
     snprintf(firmware_path, sizeof(firmware_path), "/tmp/firmware-%s.bin",
              manager->new_version);
     
-    // 打开固件文件
+    // 打开固件文件。
     FILE *fp = fopen(firmware_path, "rb");
     if (!fp) {
         log_error("Failed to open firmware file");
@@ -628,12 +628,12 @@ int ota_install(OtaManager *manager)
         return -1;
     }
     
-    // 获取固件文件大小
+    // 获取固件文件大小。
     fseek(fp, 0, SEEK_END);
     size_t firmware_size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
     
-    // 打开目标分区设备
+    // 打开目标分区设备。
     int fd = open(manager->inactive_partition->device, O_WRONLY);
     if (fd < 0) {
         log_error("Failed to open partition: %s",
@@ -643,7 +643,7 @@ int ota_install(OtaManager *manager)
         return -1;
     }
     
-    // 写入固件到分区
+    // 写入固件到分区。
     uint8_t buffer[4096];
     size_t total_written = 0;
     ssize_t len;
@@ -663,14 +663,14 @@ int ota_install(OtaManager *manager)
         }
         total_written += written;
         
-        // 更新写入进度
+        // 更新写入进度。
         manager->download_progress = (int)(total_written * 100 / firmware_size);
         if (manager->on_progress) {
             manager->on_progress(manager, manager->download_progress);
         }
     }
     
-    // 确保数据写入磁盘
+    // 确保数据写入磁盘。
     fsync(fd);
     close(fd);
     fclose(fp);
@@ -678,14 +678,14 @@ int ota_install(OtaManager *manager)
     log_info("Firmware written to partition %s: %zu bytes",
              manager->inactive_partition->name, total_written);
     
-    // 更新启动配置
+    // 更新启动配置。
     BootConfig boot_cfg;
     read_boot_config(manager->config.boot_config, &boot_cfg);
     
-    // 设置新的活跃分区
+    // 设置新的活跃分区。
     boot_cfg.active_partition = (manager->inactive_partition == &manager->partition_b) ? 1 : 0;
     boot_cfg.boot_count = 0;
-    boot_cfg.upgrade_pending = 1;  // 标记有待处理的升级
+    boot_cfg.upgrade_pending = 1;  // 标记有待处理的升级。
     
     if (write_boot_config(manager->config.boot_config, &boot_cfg) != 0) {
         log_error("Failed to update boot config");
@@ -693,7 +693,7 @@ int ota_install(OtaManager *manager)
         return -1;
     }
     
-    // 清理临时文件
+    // 清理临时文件。
     remove(firmware_path);
     
     log_info("Installation complete, upgrade pending");
@@ -718,26 +718,26 @@ int ota_upgrade(OtaManager *manager)
     
     log_info("Starting OTA upgrade...");
     
-    // 步骤1：检查更新
+    // 步骤 1：检查更新。
     char version[64];
     if (ota_check_update(manager, version, sizeof(version)) != 0) {
         log_info("No update available");
         return 1;
     }
     
-    // 步骤2：下载固件
+    // 步骤 2：下载固件。
     if (ota_download(manager) != 0) {
         log_error("Download failed");
         return -1;
     }
     
-    // 步骤3：验证签名
+    // 步骤 3：验证签名。
     if (ota_verify(manager) != 0) {
         log_error("Verification failed");
         return -1;
     }
     
-    // 步骤4：安装固件
+    // 步骤 4：安装固件。
     if (ota_install(manager) != 0) {
         log_error("Installation failed");
         return -1;
@@ -765,14 +765,14 @@ int ota_rollback(OtaManager *manager)
     
     log_warn("Performing rollback...");
     
-    // 读取当前启动配置
+    // 读取当前启动配置。
     BootConfig boot_cfg;
     read_boot_config(manager->config.boot_config, &boot_cfg);
     
-    // 切换回之前的分区
+    // 切换回之前的分区。
     boot_cfg.active_partition = (boot_cfg.active_partition == 0) ? 1 : 0;
     boot_cfg.boot_count = 0;
-    boot_cfg.upgrade_pending = 0;  // 清除升级标记
+    boot_cfg.upgrade_pending = 0;  // 清除升级标记。
     
     if (write_boot_config(manager->config.boot_config, &boot_cfg) != 0) {
         log_error("Failed to update boot config for rollback");

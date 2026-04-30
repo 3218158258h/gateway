@@ -16,6 +16,7 @@
 #include "../include/app_protocol_config.h"
 #include "../include/app_router.h"
 #include "../include/app_persistence.h"
+#include "../include/app_serial.h"
 #include "../include/app_config.h"
 #include "../thirdparty/log.c/log.h"
 
@@ -76,7 +77,7 @@ static void log_device_snapshot(int index, const char *path,
              index,
              path ? path : "",
              interface_name ? interface_name : "",
-             protocol_name ? protocol_name : "");
+             (protocol_name && protocol_name[0]) ? protocol_name : "none");
 }
 
 /* 去除字符串首尾空白字符。 */
@@ -120,9 +121,9 @@ static int parse_serial_device_list(char *list, char out_paths[][MAX_DEVICE_PATH
     return count;
 }
 
-static int parse_string_list(char *list, char out_values[][APP_PROTOCOL_NAME_MAX_LEN], int max_count)
+static int parse_string_list(char *list, char *out_values, size_t value_len, int max_count)
 {
-    if (!list || !out_values || max_count <= 0) {
+    if (!list || !out_values || value_len == 0 || max_count <= 0) {
         return 0;
     }
 
@@ -132,12 +133,137 @@ static int parse_string_list(char *list, char out_values[][APP_PROTOCOL_NAME_MAX
     while (token && count < max_count) {
         char *value = trim_whitespace(token);
         if (value[0] != '\0') {
-            snprintf(out_values[count], APP_PROTOCOL_NAME_MAX_LEN, "%s", value);
+            char *target = out_values + (size_t)count * value_len;
+            snprintf(target, value_len, "%s", value);
             count++;
         }
         token = strtok_r(NULL, ",", &saveptr);
     }
     return count;
+}
+
+/* 解析逗号分隔字符串并按索引对齐，保留空项用于显式占位。 */
+static int parse_aligned_string_list(char *list, char *out_values, size_t value_len,
+                                     int max_count, int *out_non_empty_count)
+{
+    if (!list || !out_values || value_len == 0 || max_count <= 0) {
+        return 0;
+    }
+
+    int index = 0;
+    int non_empty = 0;
+    char *cursor = list;
+    while (cursor && index < max_count) {
+        char *token_start = cursor;
+        char *comma = strchr(cursor, ',');
+        if (comma) {
+            *comma = '\0';
+            cursor = comma + 1;
+        } else {
+            cursor = NULL;
+        }
+
+        char *value = trim_whitespace(token_start);
+        char *target = out_values + (size_t)index * value_len;
+        if (value[0] != '\0') {
+            snprintf(target, value_len, "%s", value);
+            non_empty++;
+        }
+        index++;
+    }
+
+    if (out_non_empty_count) {
+        *out_non_empty_count = non_empty;
+    }
+    return index;
+}
+
+static int load_device_registry_from_physical_config(const ConfigManager *gateway_cfg,
+                                                     char out_paths[][MAX_DEVICE_PATH_LEN],
+                                                     char out_interfaces[][APP_INTERFACE_NAME_MAX_LEN],
+                                                     char out_protocols[][APP_PROTOCOL_NAME_MAX_LEN],
+                                                     int max_devices,
+                                                     int *out_count)
+{
+    if (!gateway_cfg || !out_paths || !out_interfaces || !out_protocols || !out_count || max_devices <= 0) {
+        return -1;
+    }
+
+    char physical_cfg_file[CONFIG_MAX_PATH_LEN] = {0};
+    config_get_string((ConfigManager *)gateway_cfg, "config_files", "physical_transport",
+                      APP_PHYSICAL_TRANSPORT_CONFIG_FILE, physical_cfg_file, sizeof(physical_cfg_file));
+    if (physical_cfg_file[0] == '\0') {
+        snprintf(physical_cfg_file, sizeof(physical_cfg_file), "%s", APP_PHYSICAL_TRANSPORT_CONFIG_FILE);
+    }
+
+    ConfigManager physical_cfg = {0};
+    if (config_init(&physical_cfg, physical_cfg_file) != 0 || config_load(&physical_cfg) != 0) {
+        config_destroy(&physical_cfg);
+        return -1;
+    }
+
+    char device_paths[CONFIG_MAX_VALUE_LEN] = {0};
+    if (config_get_string(&physical_cfg, "device_registry", "device_paths", "",
+                          device_paths, sizeof(device_paths)) != 0 ||
+        device_paths[0] == '\0') {
+        config_destroy(&physical_cfg);
+        return -1;
+    }
+
+    int parsed_paths = parse_serial_device_list(device_paths, out_paths, max_devices);
+    if (parsed_paths <= 0) {
+        config_destroy(&physical_cfg);
+        return -1;
+    }
+
+    for (int i = 0; i < parsed_paths; i++) {
+        snprintf(out_interfaces[i], APP_INTERFACE_NAME_MAX_LEN, "%s", DEFAULT_DEVICE_INTERFACE);
+        out_protocols[i][0] = '\0';
+    }
+
+    char interfaces_list[CONFIG_MAX_VALUE_LEN] = {0};
+    if (config_get_string(&physical_cfg, "device_registry", "interfaces", "",
+                          interfaces_list, sizeof(interfaces_list)) == 0 &&
+        interfaces_list[0] != '\0') {
+        int parsed_interfaces_non_empty = 0;
+        int parsed_interfaces_total = parse_aligned_string_list(
+            interfaces_list,
+            (char *)out_interfaces,
+            APP_INTERFACE_NAME_MAX_LEN,
+            parsed_paths,
+            &parsed_interfaces_non_empty);
+        if (parsed_interfaces_total < parsed_paths) {
+            log_warn("[device_registry] interfaces count(%d) < device_paths count(%d), remaining use default '%s'",
+                     parsed_interfaces_total, parsed_paths, DEFAULT_DEVICE_INTERFACE);
+        } else if (parsed_interfaces_non_empty < parsed_paths) {
+            log_info("[device_registry] interfaces contains %d empty slot(s), using default '%s' by index",
+                     parsed_paths - parsed_interfaces_non_empty, DEFAULT_DEVICE_INTERFACE);
+        }
+    }
+
+    char protocols_list[CONFIG_MAX_VALUE_LEN] = {0};
+    if (config_get_string(&physical_cfg, "device_registry", "protocols", "",
+                          protocols_list, sizeof(protocols_list)) == 0 &&
+        protocols_list[0] != '\0') {
+        int parsed_protocols_non_empty = 0;
+        int parsed_protocols_total = parse_aligned_string_list(
+            protocols_list,
+            (char *)out_protocols,
+            APP_PROTOCOL_NAME_MAX_LEN,
+            parsed_paths,
+            &parsed_protocols_non_empty);
+        if (parsed_protocols_total < parsed_paths) {
+            log_warn("[device_registry] protocols count(%d) < device_paths count(%d), remaining treated as empty",
+                     parsed_protocols_total, parsed_paths);
+        } else if (parsed_protocols_non_empty < parsed_paths) {
+            log_info("[device_registry] protocols contains %d empty slot(s), those devices skip private protocol",
+                     parsed_paths - parsed_protocols_non_empty);
+        }
+    }
+
+    config_destroy(&physical_cfg);
+    *out_count = parsed_paths;
+    return 0;
 }
 
 /**
@@ -167,6 +293,13 @@ static int load_device_config(const ConfigManager *gateway_cfg,
     }
     if (max_devices > ROUTER_MAX_DEVICES) {
         max_devices = ROUTER_MAX_DEVICES;
+    }
+
+    if (load_device_registry_from_physical_config(gateway_cfg, out_paths, out_interfaces,
+                                                  out_protocols, max_devices, out_count) == 0 &&
+        *out_count > 0) {
+        log_info("Device registry loaded from physical config: count=%d", *out_count);
+        return 0;
     }
 
     char serial_devices[CONFIG_MAX_VALUE_LEN];
@@ -202,7 +335,8 @@ static int load_device_config(const ConfigManager *gateway_cfg,
     }
 
     if (*out_count == 0) {
-        log_error("Missing required config: [device].serial_devices or [device].single_device");
+        log_error("Missing required config: [device_registry].device_paths "
+                  "(from physical_transport) or legacy [device].serial_devices/[device].single_device");
         return -1;
     }
 
@@ -217,8 +351,8 @@ static int load_device_config(const ConfigManager *gateway_cfg,
         serial_interfaces[0] != '\0') {
         char interfaces_copy[CONFIG_MAX_VALUE_LEN] = {0};
         snprintf(interfaces_copy, sizeof(interfaces_copy), "%s", serial_interfaces);
-        char values[ROUTER_MAX_DEVICES][APP_PROTOCOL_NAME_MAX_LEN] = {{0}};
-        int parsed = parse_string_list(interfaces_copy, values, *out_count);
+        char values[ROUTER_MAX_DEVICES][APP_INTERFACE_NAME_MAX_LEN] = {{0}};
+        int parsed = parse_string_list(interfaces_copy, (char *)values, APP_INTERFACE_NAME_MAX_LEN, *out_count);
         for (int i = 0; i < parsed && i < *out_count; i++) {
             snprintf(out_interfaces[i], APP_INTERFACE_NAME_MAX_LEN, "%s", values[i]);
         }
@@ -231,7 +365,7 @@ static int load_device_config(const ConfigManager *gateway_cfg,
         char protocols_copy[CONFIG_MAX_VALUE_LEN] = {0};
         snprintf(protocols_copy, sizeof(protocols_copy), "%s", serial_protocols);
         char values[ROUTER_MAX_DEVICES][APP_PROTOCOL_NAME_MAX_LEN] = {{0}};
-        int parsed = parse_string_list(protocols_copy, values, *out_count);
+        int parsed = parse_string_list(protocols_copy, (char *)values, APP_PROTOCOL_NAME_MAX_LEN, *out_count);
         for (int i = 0; i < parsed && i < *out_count; i++) {
             snprintf(out_protocols[i], APP_PROTOCOL_NAME_MAX_LEN, "%s", values[i]);
         }
@@ -341,8 +475,11 @@ static int load_persistence_config(const ConfigManager *gateway_cfg, Persistence
 static void on_device_message_persist(RouterManager *router, Device *device,
                                        const void *data, size_t len)
 {
-    (void)device;
     int qos = 1;
+    const char *device_path = "";
+    const char *interface_name = "unknown";
+    const char *protocol_family = "unknown";
+    const char *protocol_name = "unknown";
 
     if (router) {
         qos = router->transport.config.default_qos;
@@ -351,9 +488,34 @@ static void on_device_message_persist(RouterManager *router, Device *device,
         }
     }
 
+    if (device) {
+        const SerialDevice *serial_device = (const SerialDevice *)device;
+        device_path = device->filename ? device->filename : "";
+        interface_name = app_transport_interface_to_string(serial_device->transport.interface_type);
+        protocol_name = serial_device->transport.protocol_name[0] ?
+                        serial_device->transport.protocol_name : "unknown";
+
+        switch (serial_device->transport.interface_type) {
+        case APP_INTERFACE_I2C:
+            protocol_family = "i2c_reg";
+            break;
+        case APP_INTERFACE_SPI:
+            protocol_family = "spi_cmd";
+            break;
+        case APP_INTERFACE_CAN:
+            protocol_family = "can_raw";
+            break;
+        case APP_INTERFACE_SERIAL:
+        default:
+            protocol_family = "serial_private";
+            break;
+        }
+    }
+
     /* 保存消息到数据库，QoS 与传输层默认配置保持一致。 */
     uint64_t msg_id;
-    if (persistence_save(&persistence, "GatewayData", data, len, qos, &msg_id) == 0) {
+    if (persistence_save(&persistence, device_path, interface_name,
+                         protocol_family, protocol_name, data, len, qos, &msg_id) == 0) {
         log_trace("Message persisted: id=%llu", (unsigned long long)msg_id);
     }
 }
@@ -395,7 +557,7 @@ static void on_cloud_message_log(RouterManager *router, const char *topic,
  */
 int app_runner_run()
 {
-    // 注册信号处理函数（SIGINT: Ctrl+C, SIGTERM: kill命令）
+    // 注册信号处理函数（SIGINT：Ctrl+C；SIGTERM：终止命令）。
     signal(SIGINT, app_runner_signal_handler);
     signal(SIGTERM, app_runner_signal_handler);
 
@@ -532,7 +694,7 @@ int app_runner_run()
                  i,
                  active_configs[i].path,
                  active_configs[i].interface_name,
-                 active_configs[i].protocol_name);
+                 active_configs[i].protocol_name[0] ? active_configs[i].protocol_name : "none");
     }
 
     // 注册消息回调函数

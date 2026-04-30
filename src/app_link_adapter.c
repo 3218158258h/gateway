@@ -1,7 +1,296 @@
 #include "../include/app_link_adapter.h"
+#include "../include/app_config.h"
+#include "../include/app_iface_i2c.h"
+#include "../include/app_iface_spi.h"
 #include "../thirdparty/log.c/log.h"
 
-/* 接口层初始化：根据 interface_name 判断接口类型并打开设备文件（目前仅支持串口/UART）。
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <linux/spi/spidev.h>
+#include <linux/i2c-dev.h>
+#include <linux/can.h>
+#include <linux/can/raw.h>
+#include <net/if.h>
+
+#define LINK_ADAPTER_TMP_DEVICE "/dev/null"
+#define CAN_MESSAGE_ID_LEN 4
+#define CAN_MESSAGE_MAX_DATA_LEN 8
+
+static const char *default_section_by_type(AppInterfaceType interface_type)
+{
+    switch (interface_type) {
+    case APP_INTERFACE_SPI:
+        return "transport.spi_default";
+    case APP_INTERFACE_I2C:
+        return "transport.i2c_default";
+    case APP_INTERFACE_CAN:
+        return "transport.can_default";
+    case APP_INTERFACE_SERIAL:
+    default:
+        return "transport.serial_default";
+    }
+}
+
+/* 允许配置节省略 interface 字段；若填写了则必须与期望类型一致。 */
+static int section_interface_matches(ConfigManager *cfg_mgr, const char *section,
+                                     AppInterfaceType expected_type)
+{
+    char value[CONFIG_MAX_VALUE_LEN] = {0};
+    if (config_get_string(cfg_mgr, section, "interface", "", value, sizeof(value)) != 0 ||
+        value[0] == '\0') {
+        return 1;
+    }
+    return app_transport_string_to_interface(value) == expected_type;
+}
+
+static int load_physical_config_for_device(SerialDevice *device, const char *device_path,
+                                           AppInterfaceType interface_type)
+{
+    if (!device || !device_path) {
+        return -1;
+    }
+
+    app_transport_config_init(device);
+    device->transport.interface_type = interface_type;
+    snprintf(device->transport.device_path, sizeof(device->transport.device_path), "%s", device_path);
+
+    ConfigManager cfg_mgr = {0};
+    if (config_init(&cfg_mgr, APP_PHYSICAL_TRANSPORT_CONFIG_FILE) != 0 ||
+        config_load(&cfg_mgr) != 0) {
+        config_destroy(&cfg_mgr);
+        return 0;
+    }
+
+    /* 匹配策略：先按 device_path 精确命中，再校验 interface 类型。 */
+    const char *matched_section = NULL;
+    for (int i = 0; i < cfg_mgr.item_count; i++) {
+        ConfigItem *item = &cfg_mgr.items[i];
+        if (strcmp(item->key, "device_path") != 0) {
+            continue;
+        }
+        if (strcmp(item->value, device_path) != 0) {
+            continue;
+        }
+        if (!section_interface_matches(&cfg_mgr, item->section, interface_type)) {
+            continue;
+        }
+        matched_section = item->section;
+        break;
+    }
+
+    /* 若未找到设备专属配置，回退到对应接口 default 节。 */
+    if (!matched_section) {
+        matched_section = default_section_by_type(interface_type);
+    }
+
+    (void)app_transport_config_load(device, APP_PHYSICAL_TRANSPORT_CONFIG_FILE, matched_section);
+    device->transport.interface_type = interface_type;
+    snprintf(device->transport.device_path, sizeof(device->transport.device_path), "%s", device_path);
+    config_destroy(&cfg_mgr);
+    return 0;
+}
+
+static int can_post_read(Device *device, void *ptr, int *len)
+{
+    if (!device || !ptr || !len || *len <= 0) {
+        return -1;
+    }
+
+    if (*len < (int)sizeof(struct can_frame)) {
+        *len = 0;
+        return 0;
+    }
+
+    /* 将原生 can_frame 统一转换为网关内部帧，便于路由层复用。 */
+    struct can_frame *frame = (struct can_frame *)ptr;
+    unsigned char out[3 + CAN_MESSAGE_ID_LEN + CAN_MESSAGE_MAX_DATA_LEN];
+    int data_len = frame->can_dlc;
+    if (data_len < 0) {
+        data_len = 0;
+    }
+    if (data_len > CAN_MESSAGE_MAX_DATA_LEN) {
+        data_len = CAN_MESSAGE_MAX_DATA_LEN;
+    }
+
+    out[0] = (unsigned char)device->connection_type;
+    out[1] = CAN_MESSAGE_ID_LEN;
+    out[2] = (unsigned char)data_len;
+    out[3] = (unsigned char)((frame->can_id >> 24) & 0xFF);
+    out[4] = (unsigned char)((frame->can_id >> 16) & 0xFF);
+    out[5] = (unsigned char)((frame->can_id >> 8) & 0xFF);
+    out[6] = (unsigned char)(frame->can_id & 0xFF);
+    if (data_len > 0) {
+        memcpy(out + 7, frame->data, (size_t)data_len);
+    }
+    memcpy(ptr, out, (size_t)(7 + data_len));
+    *len = 7 + data_len;
+    return 0;
+}
+
+static int can_pre_write(Device *device, void *ptr, int *len)
+{
+    (void)device;
+    if (!ptr || !len || *len < 3) {
+        return -1;
+    }
+
+    unsigned char *buf = (unsigned char *)ptr;
+    int id_len = buf[1];
+    int data_len = buf[2];
+    int total_len = 3 + id_len + data_len;
+    if (id_len < 0 || data_len < 0 || total_len > *len) {
+        return -1;
+    }
+
+    /* 将内部帧回填为 can_frame，供底层 socket 直接发送。 */
+    struct can_frame frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.can_id = 0;
+    int copy_id_len = id_len > CAN_MESSAGE_ID_LEN ? CAN_MESSAGE_ID_LEN : id_len;
+    for (int i = 0; i < copy_id_len; i++) {
+        frame.can_id = (frame.can_id << 8) | buf[3 + i];
+    }
+    if (data_len > CAN_MESSAGE_MAX_DATA_LEN) {
+        data_len = CAN_MESSAGE_MAX_DATA_LEN;
+    }
+    frame.can_dlc = (unsigned char)data_len;
+    if (data_len > 0) {
+        memcpy(frame.data, buf + 3 + id_len, (size_t)data_len);
+    }
+
+    memcpy(ptr, &frame, sizeof(frame));
+    *len = (int)sizeof(frame);
+    return 0;
+}
+
+static int init_can_device(SerialDevice *device, const char *device_path)
+{
+    if (app_device_init(&device->super, LINK_ADAPTER_TMP_DEVICE) != 0) {
+        return -1;
+    }
+
+    /* CAN 不使用字符设备 fd，改为 PF_CAN 原始套接字。 */
+    int sock_fd = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+    if (sock_fd < 0) {
+        log_error("Failed to create CAN socket for %s: %s", device_path, strerror(errno));
+        app_device_close(&device->super);
+        return -1;
+    }
+
+    int loopback = device->transport.can.loopback ? 1 : 0;
+    if (setsockopt(sock_fd, SOL_CAN_RAW, CAN_RAW_LOOPBACK, &loopback, sizeof(loopback)) < 0) {
+        log_warn("Failed to set CAN loopback for %s: %s", device_path, strerror(errno));
+    }
+    int can_fd_enabled = device->transport.can.fd_mode ? 1 : 0;
+    if (setsockopt(sock_fd, SOL_CAN_RAW, CAN_RAW_FD_FRAMES,
+                   &can_fd_enabled, sizeof(can_fd_enabled)) < 0) {
+        log_warn("Failed to set CAN FD mode for %s: %s", device_path, strerror(errno));
+    }
+
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", device_path);
+    if (ioctl(sock_fd, SIOCGIFINDEX, &ifr) < 0) {
+        log_error("Failed to get CAN ifindex for %s: %s", device_path, strerror(errno));
+        close(sock_fd);
+        app_device_close(&device->super);
+        return -1;
+    }
+
+    struct sockaddr_can addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.can_family = AF_CAN;
+    addr.can_ifindex = ifr.ifr_ifindex;
+    if (bind(sock_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        log_error("Failed to bind CAN socket for %s: %s", device_path, strerror(errno));
+        close(sock_fd);
+        app_device_close(&device->super);
+        return -1;
+    }
+
+    int old_fd = device->super.fd;
+    device->super.fd = sock_fd;
+    if (old_fd >= 0) {
+        close(old_fd);
+    }
+    if (device->super.filename) {
+        free(device->super.filename);
+    }
+    device->super.filename = strdup(device_path);
+    if (!device->super.filename) {
+        log_error("Failed to save CAN device path: %s", device_path);
+        app_device_close(&device->super);
+        return -1;
+    }
+
+    device->super.vptr->post_read = can_post_read;
+    device->super.vptr->pre_write = can_pre_write;
+    return 0;
+}
+
+static int init_spi_device(SerialDevice *device, const char *device_path)
+{
+    if (app_device_init(&device->super, (char *)device_path) != 0) {
+        return -1;
+    }
+
+    uint8_t mode = (uint8_t)device->transport.spi.mode;
+    uint8_t bits = (uint8_t)device->transport.spi.bits_per_word;
+    uint8_t lsb_first = (uint8_t)(device->transport.spi.lsb_first ? 1 : 0);
+    uint32_t speed = (uint32_t)device->transport.spi.clock_hz;
+
+    if (ioctl(device->super.fd, SPI_IOC_WR_MODE, &mode) < 0) {
+        log_warn("SPI set mode failed for %s: %s", device_path, strerror(errno));
+    }
+    if (ioctl(device->super.fd, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0) {
+        log_warn("SPI set bits_per_word failed for %s: %s", device_path, strerror(errno));
+    }
+    if (ioctl(device->super.fd, SPI_IOC_WR_LSB_FIRST, &lsb_first) < 0) {
+        log_warn("SPI set lsb_first failed for %s: %s", device_path, strerror(errno));
+    }
+    if (ioctl(device->super.fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
+        log_warn("SPI set clock_hz failed for %s: %s", device_path, strerror(errno));
+    }
+    /* SPI 为主轮询模式，绑定专用后台任务执行周期事务。 */
+    device->super.vptr->background_task = app_iface_spi_background_task;
+    return 0;
+}
+
+static int init_i2c_device(SerialDevice *device, const char *device_path)
+{
+    if (app_device_init(&device->super, (char *)device_path) != 0) {
+        return -1;
+    }
+
+    if (ioctl(device->super.fd, I2C_TENBIT, device->transport.i2c.ten_bit_address) < 0) {
+        log_warn("I2C set ten_bit_address failed for %s: %s", device_path, strerror(errno));
+    }
+    if (ioctl(device->super.fd, I2C_SLAVE, device->transport.i2c.address) < 0) {
+        int saved_errno = errno;
+        if (saved_errno == EBUSY &&
+            ioctl(device->super.fd, I2C_SLAVE_FORCE, device->transport.i2c.address) == 0) {
+            log_warn("I2C address was busy, force-selected address for %s addr=0x%X",
+                     device_path, (unsigned int)device->transport.i2c.address);
+        } else {
+            log_warn("I2C set slave address failed for %s addr=0x%X: %s",
+                     device_path,
+                     (unsigned int)device->transport.i2c.address,
+                     strerror(saved_errno));
+        }
+    }
+    /* I2C 绑定专用后台任务，按配置寄存器轮询。 */
+    device->super.vptr->background_task = app_iface_i2c_background_task;
+    return 0;
+}
+
+/* 接口层初始化：根据 interface_name 判断接口类型并打开设备文件（支持 serial/uart/spi/i2c/can）。
  * 这里只负责建立通信通道，不涉及任何设备层指令或协议细节。 */
 int app_link_adapter_init(SerialDevice *device, const char *device_path, const char *interface_name)
 {
@@ -10,15 +299,36 @@ int app_link_adapter_init(SerialDevice *device, const char *device_path, const c
     }
 
     AppInterfaceType interface_type = app_transport_string_to_interface(interface_name);
-    if (interface_type != APP_INTERFACE_SERIAL) {
-        log_error("Unsupported interface '%s' for now, only serial is implemented",
-                  interface_name ? interface_name : "");
+    if (interface_type < APP_INTERFACE_SERIAL || interface_type > APP_INTERFACE_CAN) {
+        log_error("Unsupported interface '%s'", interface_name ? interface_name : "");
         return -1;
     }
 
-    int result = app_serial_init(device, (char *)device_path);
+    load_physical_config_for_device(device, device_path, interface_type);
+
+    int result = -1;
+    switch (interface_type) {
+    case APP_INTERFACE_SERIAL:
+        result = app_serial_init(device, (char *)device_path);
+        break;
+    case APP_INTERFACE_SPI:
+        result = init_spi_device(device, device_path);
+        break;
+    case APP_INTERFACE_I2C:
+        result = init_i2c_device(device, device_path);
+        break;
+    case APP_INTERFACE_CAN:
+        result = init_can_device(device, device_path);
+        break;
+    default:
+        result = -1;
+        break;
+    }
+
     if (result == 0) {
         device->transport.interface_type = interface_type;
+        log_info("Link adapter initialized: interface=%s path=%s",
+                 app_transport_interface_to_string(interface_type), device_path);
     }
     return result;
 }
