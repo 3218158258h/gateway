@@ -111,6 +111,7 @@ static int json_to_binary_safe(const char *json_str, int json_len,
 
 static const char *router_protocol_family(AppInterfaceType interface_type)
 {
+    /* protocol_family 用于云端快速识别数据来源语义，不等同于私有协议名。 */
     switch (interface_type) {
     case APP_INTERFACE_I2C:
         return "i2c_reg";
@@ -126,6 +127,7 @@ static const char *router_protocol_family(AppInterfaceType interface_type)
 
 static long long router_now_ms(void)
 {
+    /* 上行 envelope 使用毫秒时间戳，便于与云端日志对齐。 */
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
         return 0;
@@ -135,6 +137,7 @@ static long long router_now_ms(void)
 
 static char *router_bin_to_hex(const unsigned char *binary, int len)
 {
+    /* payload 内部保持二进制；上云时转 HEX 以避免 JSON 二进制兼容问题。 */
     if (!binary || len <= 0) {
         return strdup("");
     }
@@ -156,6 +159,7 @@ static int binary_to_envelope_json(const void *binary, int binary_len,
         return -1;
     }
 
+    /* 输入是内部统一帧：[type][id_len][data_len][id][data]。 */
     Message message;
     memset(&message, 0, sizeof(Message));
     if (app_message_initByBinary(&message, (void *)binary, binary_len) < 0) {
@@ -178,6 +182,7 @@ static int binary_to_envelope_json(const void *binary, int binary_len,
         return -1;
     }
 
+    /* 输出 envelope：设备元数据 + 原始 payload（HEX）。 */
     cJSON *root = cJSON_CreateObject();
     cJSON *payload = cJSON_CreateObject();
     if (!root || !payload) {
@@ -250,7 +255,7 @@ static void on_transport_message(TransportManager *transport, const char *topic,
     RouterManager *router = (RouterManager *)transport;
     if (!router || !data || len == 0) return;
     
-    /* 分配消息缓冲区 */
+    /* 为下行解析分配临时缓冲区，长度由 router.max_message_size 控制。 */
     int max_message_size = (router->max_message_size > 0) ? router->max_message_size : ROUTER_DEFAULT_MESSAGE_SIZE;
     unsigned char *buf = malloc((size_t)max_message_size);
     if (!buf) return;
@@ -263,10 +268,10 @@ static void on_transport_message(TransportManager *transport, const char *topic,
         return;
     }
     
-    /* 从二进制数据中获取连接类型（第一个字节） */
+    /* 首字节 connection_type 决定目标设备。 */
     ConnectionType type = (ConnectionType)buf[0];
     
-    /* 查找对应类型的设备 */
+    /* 当前下行按 connection_type 匹配设备；若同类型多设备，命中第一个。 */
     pthread_mutex_lock(&router->lock);
     Device *device = find_device_by_type(router, type);
     pthread_mutex_unlock(&router->lock);
@@ -361,7 +366,7 @@ static int on_device_message(void *context, void *ptr, int len)
         return -1;
     }
     
-    /* 使用统一的发布接口，自动适配MQTT/DDS */
+    /* 统一发布入口：由 transport 层决定 MQTT 或 DDS 的具体发送实现。 */
     int result = transport_publish_default(&router->transport, buf, json_len);
     
     free(buf);
@@ -412,6 +417,7 @@ static int app_router_init_from_loaded_config(RouterManager *router, const Confi
     router->state = ROUTER_STATE_STOPPED;
     router->is_initialized = 0;
 
+    /* transport_inited 作为失败回滚开关，避免重复 close。 */
     int transport_inited = 0;
     int router_message_size = config_get_int((ConfigManager *)cfg, "router", "max_message_size", ROUTER_DEFAULT_MESSAGE_SIZE);
 
@@ -430,7 +436,7 @@ static int app_router_init_from_loaded_config(RouterManager *router, const Confi
 
     TransportConfig transport_config = {0};
 
-    /* 先加载网络侧协议配置，再初始化传输层 */
+    /* 先解析 transport.ini，再初始化传输层，确保日志可打印完整快照。 */
     if (transport_load_config(&transport_config, transport_cfg_file) != 0) {
         log_error("Failed to load transport config file: %s", transport_cfg_file);
         return router_init_fail(router, transport_inited);
@@ -561,6 +567,7 @@ int app_router_register_device(RouterManager *router, Device *device)
         }
     }
     
+    /* 保存设备回调上下文，避免回调阶段通过全局查找反推 device。 */
     /* 添加设备到列表 */
     int index = router->device_count;
     router->devices[index] = device;

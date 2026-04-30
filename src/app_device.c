@@ -135,6 +135,11 @@ static void *app_device_backgroundTask(void *argv)
     Device *device = argv;
     int read_error_count = 0;
     
+    /*
+     * 背景线程职责仅是“采集原始输入 + 推送到 recv_buffer”：
+     * - 不在这里做业务路由，避免阻塞底层读线程
+     * - 真正的帧解析与回调在 recv_task 中执行
+     */
     while (device->is_running)
     {
         // 从设备文件描述符读取数据
@@ -196,7 +201,7 @@ static void app_device_defaultRecvTask(void *argv)
         return;
     }
 
-    // 策略一：本次任务尽可能把缓冲区中的完整帧全部消费完。
+    // 策略一：本次任务尽可能把缓冲区中的完整帧全部消费完，降低任务调度频率。
     while (device->recv_buffer->len >= FRAME_HEADER_SIZE) {
         // 先peek头部，不移除数据
         if (app_buffer_peek(device->recv_buffer, header, FRAME_HEADER_SIZE) < FRAME_HEADER_SIZE) {
@@ -224,6 +229,7 @@ static void app_device_defaultRecvTask(void *argv)
 
         int required_len = FRAME_HEADER_SIZE + total_len;
         // 帧不完整：等待更多数据；若缓冲区接近满且长期不完整，则丢弃 1 字节推进解析。
+        // 该策略用于避免“坏帧卡头”导致后续有效帧长期饥饿。
         if (device->recv_buffer->len < required_len) {
             if (device->recv_buffer->size <= RECV_STALLED_MARGIN) {
                 app_buffer_read(device->recv_buffer, header, 1);
@@ -287,7 +293,7 @@ static void app_device_defaultSendTask(void *argv)
         return;
     }
     
-    // 先窥探头部，避免在数据不完整时破坏帧边界
+    // 先窥探头部，避免在数据不完整时破坏帧边界（不消费缓冲区）
     int peek_len = app_buffer_peek(device->send_buffer, buf, FRAME_HEADER_SIZE);
     if (peek_len != FRAME_HEADER_SIZE) {
         if (peek_len < 0) {
@@ -314,7 +320,7 @@ static void app_device_defaultSendTask(void *argv)
         return;
     }
 
-    // 读取完整消息（头部 + 负载）
+    // 读取完整消息（头部 + 负载）；读到这里说明长度校验已通过
     app_buffer_read(device->send_buffer, buf, FRAME_HEADER_SIZE);
     
     // 读取剩余负载（ID + 数据）
@@ -557,12 +563,12 @@ void app_device_stop(Device *device)
         // 关闭文件描述符（会触发read返回）
         app_device_close_fd(device);
         
-        // 设置2秒超时等待线程退出
+        // 设置 2 秒超时等待线程退出，防止 shutdown 长时间卡住
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec += 2;
         
-        // 超时等待线程退出
+        // 超时后强制取消，确保 stop 操作可收敛
         if (pthread_timedjoin_np(device->background_thread, NULL, &ts) != 0) {
             // 超时后强制取消线程
             pthread_cancel(device->background_thread);

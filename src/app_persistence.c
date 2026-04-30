@@ -91,6 +91,7 @@ static int migrate_messages_table(sqlite3 *db)
     const int has_protocol_family = table_has_column(db, "messages", "protocol_family");
     const int has_protocol_name = table_has_column(db, "messages", "protocol_name");
 
+    /* 已是新结构则跳过迁移，避免每次启动都触发表重建。 */
     if (!has_topic && has_device_path && has_interface_name &&
         has_protocol_family && has_protocol_name) {
         return 0;
@@ -105,6 +106,7 @@ static int migrate_messages_table(sqlite3 *db)
         return -1;
     }
 
+    /* 迁移采用“改名旧表 + 新建 + 拷贝 + 删除旧表”的保守路径。 */
     int rc = sqlite3_exec(db, "ALTER TABLE messages RENAME TO messages_legacy;", NULL, NULL, &err_msg);
     if (rc != SQLITE_OK) {
         log_error("Failed to rename legacy table: %s", err_msg ? err_msg : "unknown");
@@ -121,6 +123,10 @@ static int migrate_messages_table(sqlite3 *db)
         return -1;
     }
 
+    /*
+     * 迁移拷贝阶段使用 CASE 回填缺失字段，确保历史数据仍可查询：
+     * - 缺失设备/接口/协议信息时填充空串或 unknown
+     */
     char copy_sql[2048];
     snprintf(copy_sql, sizeof(copy_sql),
              "INSERT INTO messages ("
@@ -260,6 +266,7 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
     memset(manager, 0, sizeof(PersistenceManager));
     
     // 加载配置参数
+    /* 允许外部传入配置；未传入时使用模块默认值。 */
     if (config) {
         memcpy(&manager->config, config, sizeof(PersistenceConfig));
     } else {
@@ -272,6 +279,7 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
         return -1;
     }
 
+    /* 打开数据库后立刻建表，确保后续写入路径恒可用。 */
     sqlite3 *db;
     // 打开数据库文件
     int rc = sqlite3_open(manager->config.db_path, &db);
@@ -313,6 +321,7 @@ int persistence_init(PersistenceManager *manager, const PersistenceConfig *confi
     }
     
     // 开启WAL模式（提升并发性能）
+    /* WAL + NORMAL：在边缘设备上兼顾吞吐与落盘安全。 */
     sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
     // 设置正常同步模式（平衡性能与安全）
     sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, NULL);
@@ -504,7 +513,7 @@ int persistence_get_next(PersistenceManager *manager, PersistMessage *out_messag
     
     sqlite3_finalize(stmt);
     
-    // 更新状态为发送中
+    // 更新状态为发送中，避免同一条消息被并发重复提取
     persistence_update_status(manager, out_message->id, MSG_STATUS_SENDING);
     
     return 0;
@@ -588,13 +597,13 @@ int persistence_mark_failed(PersistenceManager *manager, uint64_t id)
     int retry_count = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt);
     
-    // 检查是否超过最大重试次数
+    // 超过阈值后转 FAILED，停止进入待发队列
     if (retry_count >= manager->config.max_retry_count) {
         persistence_update_status(manager, id, MSG_STATUS_FAILED);
         return -1;
     }
     
-    // 重置状态为待发送，增加重试计数
+    // 未超限：回到待发送并累加重试次数，等待下一轮发送
     const char *update_sql = "UPDATE messages SET status = 0, retry_count = ?, "
                              "update_time = ? WHERE id = ?;";
     rc = sqlite3_prepare_v2(db, update_sql, -1, &stmt, NULL);

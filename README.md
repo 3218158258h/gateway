@@ -22,111 +22,91 @@
 
 ---
 
-## 1. 构建
+## 1. 快速开始（3 分钟跑通）
 
 仓库根目录：`<project-root>`
 
-### 1.1 标准构建（默认启用 DDS）
+### 1.1 构建
 ```bash
 cd <project-root>
 make
 ```
 
-如 Cyclone DDS 安装路径不是默认值，可显式指定：
+如 Cyclone DDS 安装路径不是默认值：
 ```bash
-cd <project-root>
 make DDS_HOME=/path/to/cyclonedds/install
 ```
 
----
-
-## 2. 启动
-
+### 1.2 启动
 ```bash
-cd <project-root>
 ./build/bin/gateway app
 ```
 
----
-
-## 3. 配置说明
-
-顶层清单：`<project-root>/gateway.ini`
-
-实际配置拆分到：
-- `config/transport.ini`
-- `config/transport_physical.ini`
-- `config/protocols.ini`
-- `config/daemon.ini`
-- `gateway.ini`
-
-### 3.1 传输配置
-在 `config/transport.ini` 中设置 `[transport]` / `[mqtt]` / `[dds]`
-在 `config/transport_physical.ini` 中设置串口/CAN/SPI/I2C 等物理接口参数
-
-### 3.2 运行时与路由
-- `gateway.ini` 的 `[runtime]`：线程池等运行时参数
-- `gateway.ini` 的 `[router]`：路由缓冲区参数
-
-### 3.3 设备与蓝牙
-- `gateway.ini` 的 `[device]`：设备数量上限、缓冲区等运行参数
-- `config/transport_physical.ini` 的 `[device_registry]`：设备节点列表、接口列表、协议列表
-- `config/protocols.ini` 的 `[protocol.*]`：私有协议参数与占位符变量（`m_addr/net_id/work_baud`）
-  - `protocols` 可留空占位；空项表示该设备跳过私有协议初始化。
-
-### 3.4 持久化
-`gateway.ini` 的 `[persistence]` 包含 SQLite 数据库与队列参数
-
-### 3.5 守护进程
-`config/daemon.ini` 包含守护进程参数：
-- 子进程二进制路径（`program_path`）
-- 日志重定向路径（`log_file`）
-- 崩溃阈值与重启退避策略（`max_crash_count`/`restart_backoff_*`）
-- 正常退出是否重启（`restart_on_normal_exit`）
-
-> 多蓝牙模块场景：每个蓝牙模块对应一个设备实例，把节点按顺序写入
-> `config/transport_physical.ini` 的 `[device_registry].device_paths`，
-> 并用 `interfaces/protocols` 做同序对齐。
+### 1.3 看到这些日志说明主流程正常
+- `Runtime config loaded`
+- `[snapshot] event=startup_config`
+- `[device] event=bootstrap_summary`
+- `Router initialized`
+- `Transport initialized`
 
 ---
 
-## 4. 无硬件联调（推荐）
+## 2. 配置总览（先看这 5 个文件）
 
-### 4.1 创建虚拟设备节点
+- `gateway.ini`：总入口，定义运行时、路由、持久化、外部配置文件路径
+- `config/transport.ini`：云侧传输（MQTT / DDS）参数
+- `config/transport_physical.ini`：物理接口参数与设备注册表
+- `config/protocols.ini`：私有协议定义（仅在需要私有协议时启用）
+- `config/daemon.ini`：守护进程参数
+
+推荐顺序：
+1. 先改 `config/transport_physical.ini` 的 `[device_registry]`
+2. 再改 `config/transport.ini` 的传输类型与主题
+3. 最后按需改 `config/protocols.ini` 和 `gateway.ini` 的运行参数
+
+---
+
+## 3. 设备配置（最关键）
+
+核心在 `config/transport_physical.ini` 的 `[device_registry]`：
+- `device_paths`：设备节点列表
+- `interfaces`：接口类型列表（`serial/spi/i2c/can`）
+- `protocols`：私有协议名列表，可留空
+
+三条规则：
+1. 三个列表按顺序一一对应
+2. 某设备不需要私有协议时，在 `protocols` 对应位置留空
+3. `interfaces/protocols` 允许空槽位，系统会按默认值回退并给出日志
+
+示例：
+```ini
+[device_registry]
+device_paths = /tmp/gateway-vdev/uart-gw0,/tmp/gateway-vdev/uart-gw1,/dev/i2c-0
+interfaces   = serial,serial,i2c
+protocols    = ble_mesh_default,, 
+```
+
+---
+
+## 4. 两种运行场景
+
+### 4.1 场景 A：无硬件联调（推荐先用这个）
+
+1. 创建 UART 虚拟节点：
 ```bash
-cd <project-root>
 ./scripts/debug_uart_pseudo.sh 3 /tmp/gateway-vdev
 ```
 
-按设备类型创建（轮询分配）：
+2. 把生成的 `uart-gw*` 写入 `[device_registry].device_paths`
+
+3. 启动网关：
 ```bash
-./scripts/debug_uart_pseudo.sh 6 /tmp/gateway-vdev /tmp/gateway-debug-uart-map.tsv --types ble_mesh,lora
+./build/bin/gateway app
 ```
 
-脚本会输出 `uart-gw` 端口列表，把它写进
-`config/transport_physical.ini` 的 `[device_registry].device_paths`。
-同时会生成兼容软链 `gwN/simN`，兼容旧配置与旧工具。
-映射文件列：`index type_name type_code gw_port sim_port socat_pid`。
-
-可选：创建 I2C/SPI 无设备调试环境
+4. 模拟下位机上报：
 ```bash
-sudo ./scripts/debug_i2c_stub.sh 10 0x50 /tmp/gateway-debug-i2c-map.tsv
-sudo ./scripts/debug_spi_mock.sh spi-mockup /dev/spidev0.0 /tmp/gateway-debug-spi-map.tsv
-```
-说明：
-- I2C 使用内核 `i2c-stub`，可模拟寄存器从设备事务。
-- SPI 使用内核 mock/stub 模块，需按目标内核实际模块名传入（示例为 `spi-mockup`）。
-- 两者都用于“真实 ioctl 语义”联调，不再使用 PTY 伪节点冒充总线设备。
-
-可选：创建 CAN 虚拟接口（基于 Linux `vcan`）
-```bash
-./scripts/debug_can_vcan.sh 2 vcan /tmp/gateway-debug-can-map.tsv
-```
-说明：CAN 脚本创建并拉起 `vcan` 设备（如 `vcan0/vcan1`），可配合 `cansend/candump` 做链路联调。
-
-### 4.2 模拟下位机发消息
-```bash
-python3 <project-root>/scripts/simulate_lower_device.py \
+python3 scripts/simulate_lower_device.py \
   --port /tmp/gateway-vdev/uart-sim0 \
   --device-id 0001 \
   --payload 01020304 \
@@ -134,87 +114,78 @@ python3 <project-root>/scripts/simulate_lower_device.py \
   --interval 1
 ```
 
-可选：模拟 AT 指令 ACK
+可选：
+- I2C stub：`sudo ./scripts/debug_i2c_stub.sh 10 0x50 /tmp/gateway-debug-i2c-map.tsv`
+- SPI mock：`sudo ./scripts/debug_spi_mock.sh spi-mockup /dev/spidev0.0 /tmp/gateway-debug-spi-map.tsv`
+- CAN vcan：`./scripts/debug_can_vcan.sh 2 vcan /tmp/gateway-debug-can-map.tsv`
+
+### 4.2 场景 B：真实设备
+
+1. 在 `[device_registry].device_paths` 填真实节点（如 `/dev/ttyUSB0`、`/dev/i2c-0`、`can0`）
+2. 在同序 `interfaces` 填对应接口类型
+3. 串口设备如需私有协议，再在 `protocols` 填协议名；不需要就留空
+4. 启动并观察 `[device] event=registered` 是否全部成功
+
+---
+
+## 5. 联调验证清单
+
+### 5.1 上行验证（设备 -> 云）
+- 看日志是否出现设备消息处理与 publish 成功
+- 数据入库检查：
 ```bash
-python3 <project-root>/scripts/simulate_lower_device.py \
-  --port /tmp/gateway-vdev/uart-sim0 \
-  --ack-at --count 0
+python3 scripts/read_gateway_db.py --limit 20
 ```
 
-### 4.3 监控串口数据
+### 5.2 下行验证（云 -> 设备）
+编译测试工具：
 ```bash
-./scripts/debug_uart_monitor.sh /tmp/gateway-vdev/uart-gw0
-```
-
-### 4.4 DDS 下行命令发布（按设备类型）
-先编译测试发布者：
-```bash
-cd <project-root>
 make -C test
 ```
 
-按单一设备类型发送（支持别名：`ble_mesh|lora|none`）：
+DDS 发布测试命令：
 ```bash
-<project-root>/test/publisher --device-type ble_mesh --count 100 --interval-ms 200
+./test/publisher --device-type ble_mesh --count 20 --interval-ms 200
 ```
 
-按多类型循环发送：
-```bash
-<project-root>/test/publisher --type-seq ble_mesh,lora --count 100 --interval-ms 200
-```
-
-> 注意：网关当前下行路由按 `connection_type` 匹配设备，不按消息 `id` 匹配。
+说明：当前下行路由按 `connection_type` 匹配设备，不按消息 `id` 匹配。
 
 ---
 
-## 5. 数据库查看（SQLite）
+## 6. 数据库排查
 
-数据库路径在 `gateway.ini` 的 `[persistence].db_path`。
+数据库路径：`gateway.ini` 的 `[persistence].db_path`
 
 ```bash
-sqlite3 <db_path_from_gateway_ini>
+sqlite3 <db_path>
 ```
 
-常用命令：
+常用 SQL：
 ```sql
 .tables
-.schema
 SELECT COUNT(*) FROM messages;
-SELECT id, device_path, interface_name, protocol_name, status, retry_count
+SELECT id, device_path, interface_name, protocol_family, protocol_name, qos, status, retry_count
 FROM messages ORDER BY id DESC LIMIT 20;
 ```
 
-也可以使用项目内置 Python 脚本（使用 Python 内置 sqlite3）：
-```bash
-cd <project-root>
-python3 scripts/read_gateway_db.py
-# 或指定数据库路径
-python3 scripts/read_gateway_db.py --db <db_path_from_gateway_ini> --limit 50
-```
-
 ---
 
-## 6. 常见问题
+## 7. 常见问题（高频）
 
-### Q1: `transport.type=dds` 启动失败
-通常是 Cyclone DDS 库路径配置不正确（检查 `DDS_HOME`、`LD_LIBRARY_PATH` 或系统库路径）。
+### Q1：DDS 启动失败
+通常是 Cyclone DDS 路径问题，检查 `DDS_HOME` 与系统库路径。
 
-### Q2: 启动日志太多
-当前已进一步精简高频日志：
-- 不再打印缓冲区读写剩余长度跟踪日志
-- 仅在缓冲区创建失败时打印“第几个创建失败”
-- 高频发布/持久化日志下调到 TRACE，默认 INFO 级别下不会刷屏
+### Q2：设备部分失败但进程没退出
+这是设计行为：只要至少有一个设备成功初始化，网关继续运行。
 
-### Q3: 为什么某个设备启动失败后网关还能继续运行？
-这是预期行为。当前启动策略为“部分成功可运行”：  
-只要至少有一个设备成功初始化并配置，网关会继续提供服务；失败设备会记录在 `[device]` 日志里。
+### Q3：日志里出现大量 `[health]`
+这是传输层健康诊断日志，用于定位连接/发布/订阅失败，不建议直接关闭。
 
-### Q4: 如何快速定位传输层异常？
-优先看 `[health]` 日志，关注以下字段：
-- `connect_attempts / connect_failures`
-- `publish_attempts / publish_failures`
-- `subscribe_attempts / subscribe_failures`
-- `last_error_stage / last_error_code`
+### Q4：如何快速判断配置是否生效
+看启动快照日志：
+- `[snapshot] event=startup_config`
+- `[snapshot] event=device_config`
+- `[snapshot] event=transport_config`
 
 ---
 

@@ -142,7 +142,12 @@ static int parse_string_list(char *list, char *out_values, size_t value_len, int
     return count;
 }
 
-/* 解析逗号分隔字符串并按索引对齐，保留空项用于显式占位。 */
+/* 
+ * 解析逗号分隔字符串并按索引对齐，保留空项用于显式占位。
+ * 与 parse_string_list 的差异：
+ * - parse_string_list 会跳过空项，适合“紧凑列表”
+ * - 此函数保留空项，适合“按设备索引一一对应”的列表
+ */
 static int parse_aligned_string_list(char *list, char *out_values, size_t value_len,
                                      int max_count, int *out_non_empty_count)
 {
@@ -189,6 +194,7 @@ static int load_device_registry_from_physical_config(const ConfigManager *gatewa
         return -1;
     }
 
+    /* 设备注册优先走 physical transport 配置，便于统一管理多接口。 */
     char physical_cfg_file[CONFIG_MAX_PATH_LEN] = {0};
     config_get_string((ConfigManager *)gateway_cfg, "config_files", "physical_transport",
                       APP_PHYSICAL_TRANSPORT_CONFIG_FILE, physical_cfg_file, sizeof(physical_cfg_file));
@@ -210,18 +216,21 @@ static int load_device_registry_from_physical_config(const ConfigManager *gatewa
         return -1;
     }
 
+    /* 先解析 device_paths，后续 interfaces/protocols 都以此索引为基准。 */
     int parsed_paths = parse_serial_device_list(device_paths, out_paths, max_devices);
     if (parsed_paths <= 0) {
         config_destroy(&physical_cfg);
         return -1;
     }
 
+    /* 先填默认值，再按显式配置覆盖，避免缺项导致野值。 */
     for (int i = 0; i < parsed_paths; i++) {
         snprintf(out_interfaces[i], APP_INTERFACE_NAME_MAX_LEN, "%s", DEFAULT_DEVICE_INTERFACE);
         out_protocols[i][0] = '\0';
     }
 
     char interfaces_list[CONFIG_MAX_VALUE_LEN] = {0};
+    /* interfaces 支持空槽位，空值按默认接口回退。 */
     if (config_get_string(&physical_cfg, "device_registry", "interfaces", "",
                           interfaces_list, sizeof(interfaces_list)) == 0 &&
         interfaces_list[0] != '\0') {
@@ -242,6 +251,7 @@ static int load_device_registry_from_physical_config(const ConfigManager *gatewa
     }
 
     char protocols_list[CONFIG_MAX_VALUE_LEN] = {0};
+    /* protocols 支持空槽位，空值表示该设备不应用私有协议。 */
     if (config_get_string(&physical_cfg, "device_registry", "protocols", "",
                           protocols_list, sizeof(protocols_list)) == 0 &&
         protocols_list[0] != '\0') {
@@ -295,6 +305,7 @@ static int load_device_config(const ConfigManager *gateway_cfg,
         max_devices = ROUTER_MAX_DEVICES;
     }
 
+    /* 新配置优先：device_registry 可同时承载路径、接口、协议映射。 */
     if (load_device_registry_from_physical_config(gateway_cfg, out_paths, out_interfaces,
                                                   out_protocols, max_devices, out_count) == 0 &&
         *out_count > 0) {
@@ -315,6 +326,7 @@ static int load_device_config(const ConfigManager *gateway_cfg,
         }
     }
 
+    /* 兼容旧配置：未命中新配置时，回退到 legacy 的 single_device。 */
     if (*out_count == 0) {
         char single_device[MAX_DEVICE_PATH_LEN] = {0};
         if (!(config_get_string((ConfigManager *)gateway_cfg, "device", "single_device",
@@ -340,6 +352,7 @@ static int load_device_config(const ConfigManager *gateway_cfg,
         return -1;
     }
 
+    /* legacy 模式默认值：接口 serial，协议 ble_mesh_default。 */
     for (int i = 0; i < *out_count; i++) {
         snprintf(out_interfaces[i], APP_INTERFACE_NAME_MAX_LEN, "%s", DEFAULT_DEVICE_INTERFACE);
         snprintf(out_protocols[i], APP_PROTOCOL_NAME_MAX_LEN, "%s", DEFAULT_DEVICE_PROTOCOL);
@@ -394,6 +407,7 @@ static int load_runtime_config(const ConfigManager *gateway_cfg, RuntimeConfig *
         return -1;
     }
 
+    /* 默认值先落地，再用配置覆盖，保证缺项时可运行。 */
     runtime->thread_pool_executors = DEFAULT_TASK_EXECUTORS;
     runtime->thread_pool_executors = config_get_int(
         (ConfigManager *)gateway_cfg, "runtime", "thread_pool_executors", DEFAULT_TASK_EXECUTORS);
@@ -488,6 +502,7 @@ static void on_device_message_persist(RouterManager *router, Device *device,
         }
     }
 
+    /* 附加设备维度元数据，便于云端/数据库统一排障。 */
     if (device) {
         const SerialDevice *serial_device = (const SerialDevice *)device;
         device_path = device->filename ? device->filename : "";
@@ -620,9 +635,11 @@ int app_runner_run()
         log_device_snapshot(i, device_paths[i], device_interfaces[i], device_protocols[i]);
     }
 
+    /* 只记录“成功初始化”的设备快照，索引与 devices[] 保持一致。 */
     ActiveDeviceConfig active_configs[MAX_SERIAL_DEVICES] = {0};
     int initialized_device_count = 0;
     int failed_device_count = 0;
+    /* 每个设备两阶段：先链路初始化，再协议配置。 */
     for (int i = 0; i < configured_device_count; i++) {
         SerialDevice *target = &devices[initialized_device_count];
         if (app_device_layer_init(target, device_paths[i], device_interfaces[i]) != 0) {
@@ -676,7 +693,7 @@ int app_runner_run()
     }
     transport_log_health(&router.transport, "router_init");
 
-    // 注册串口设备到路由管理器
+    // 注册设备到路由管理器（不限串口，按实际 interface 生效）
     for (int i = 0; i < initialized_device_count; i++) {
         if (app_router_register_device(&router, (Device *)&devices[i]) != 0) {
             for (int j = 0; j < initialized_device_count; j++) {

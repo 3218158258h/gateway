@@ -35,6 +35,11 @@ static int app_device_layer_apply_protocol_non_serial(SerialDevice *serial_devic
              "%s",
              (protocol_name && protocol_name[0]) ? protocol_name : "");
 
+    /*
+     * 非串口接口的处理原则：
+     * - 可以复用“协议配置中的 connection_type”等元信息
+     * - 但不复用串口蓝牙私有帧收发钩子
+     */
     if (serial_device->transport.interface_type == APP_INTERFACE_CAN) {
         /* CAN 设备在链路层已绑定 can_post_read/can_pre_write，不覆盖钩子。 */
         app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURED);
@@ -77,6 +82,7 @@ static int app_device_layer_apply_protocol_serial(SerialDevice *serial_device,
     /* 设备层只编排流程，不直接拼协议字节。 */
     app_device_layer_set_state(&serial_device->super, DEVICE_STATE_CONFIGURING);
 
+    /* 串口协议常见流程：先用 9600 建链配置，再切到工作波特率。 */
     SerialBaudRate work_baud = (protocol->work_baud == 9600)
                                ? SERIAL_BAUD_RATE_9600
                                : SERIAL_BAUD_RATE_115200;
@@ -117,6 +123,7 @@ static int app_device_layer_apply_protocol_serial(SerialDevice *serial_device,
         }
     }
 
+    /* 初始化指令支持占位符替换，避免同协议多设备复制粘贴。 */
     for (int i = 0; i < protocol->init_cmds_count; i++) {
         char expanded[APP_PROTOCOL_INIT_CMD_MAX_LEN];
         AppProtocolPlaceholder placeholders[] = {
@@ -168,6 +175,11 @@ static int app_device_layer_apply_protocol(SerialDevice *serial_device, const ch
         return -1;
     }
 
+    /*
+     * 空协议模式：
+     * - 设备仍可启动链路收发
+     * - 不做私有协议初始化，不挂蓝牙串口封包钩子
+     */
     if (!protocol_name || protocol_name[0] == '\0') {
         /* 空协议表示该设备仅启用链路层收发，不做私有协议初始化与组帧。 */
         serial_device->super.connection_type = CONNECTION_TYPE_NONE;
