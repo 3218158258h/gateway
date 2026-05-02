@@ -31,6 +31,8 @@
 #define MAX_FRAME_PAYLOAD_LEN (RECV_TASK_BUF_SIZE - FRAME_HEADER_SIZE)
 /* 保留一个帧头长度的余量；当缓冲区接近满且帧仍不完整时，丢弃一个字节推动解析前进。 */
 #define RECV_STALLED_MARGIN FRAME_HEADER_SIZE
+/* 设备停止时等待后台线程退出的超时（毫秒）。 */
+#define DEVICE_STOP_JOIN_TIMEOUT_MS 300
 static int g_device_buffer_len = DEFAULT_BUFFER_LEN;
 
 static int app_device_is_valid_connection_type(int connection_type)
@@ -563,11 +565,16 @@ void app_device_stop(Device *device)
         // 关闭文件描述符（会触发read返回）
         app_device_close_fd(device);
         
-        // 设置 2 秒超时等待线程退出，防止 shutdown 长时间卡住
+        // 短超时等待线程自然退出，避免多设备场景下累计长时间卡住
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 2;
-        
+        ts.tv_sec += DEVICE_STOP_JOIN_TIMEOUT_MS / 1000;
+        ts.tv_nsec += (DEVICE_STOP_JOIN_TIMEOUT_MS % 1000) * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000L;
+        }
+
         // 超时后强制取消，确保 stop 操作可收敛
         if (pthread_timedjoin_np(device->background_thread, NULL, &ts) != 0) {
             // 超时后强制取消线程
