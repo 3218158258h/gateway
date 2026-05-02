@@ -93,7 +93,7 @@ LDFLAGS = -lpthread -lpaho-mqtt3c -lcurl -lssl -lcrypto -ldl
 
 # DDS编译选项（固定启用）
 # 可按需覆盖：make DDS_HOME=/opt/cyclonedds/install
-DDS_HOME ?= /home/nvidia/cyclonedds/install
+DDS_HOME ?= /home/cyclonedds/install
 CFLAGS += -I$(DDS_HOME)/include
 LDFLAGS += -L$(DDS_HOME)/lib
 LDFLAGS += -lddsc
@@ -187,7 +187,7 @@ help:
 	@echo "Options:"
 	@echo "  TARGET=x86   - Build for x86 (default)"
 	@echo "  TARGET=arm   - Build for ARM (cross-compile)"
-	@echo "  DDS_HOME=... - Cyclone DDS install path (default: /home/nvidia/cyclonedds/install)"
+	@echo "  DDS_HOME=... - Cyclone DDS install path (default: /home/cyclonedds/install)"
 	@echo ""
 	@echo "Dependencies (Ubuntu/Debian):"
 	@echo "  sudo apt-get install libpaho-mqtt-dev libsqlite3-dev libcurl4-openssl-dev libssl-dev"

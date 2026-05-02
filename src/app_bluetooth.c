@@ -10,9 +10,6 @@
 
 #define READ_BUFFER_SIZE 256
 #define BT_ADDR_STR_LEN 4
-#define DEFAULT_BT_MADDR "0001"
-#define DEFAULT_BT_NETID "1111"
-#define DEFAULT_BT_WORK_BAUD 115200
 #define BT_CONTEXT_GROW_STEP 8
 
 typedef struct {
