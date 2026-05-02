@@ -10,8 +10,8 @@
 /**
  * @brief 接口层初始化：根据接口类型打开设备文件描述符
  *
- * 接口层只负责建立通信通道（如打开串口），不涉及设备层的
- * 帧格式、AT指令等协议细节。
+ * 接口层负责建立通信通道与物理参数下发（串口/CAN/SPI/I2C），
+ * 不负责私有协议初始化指令与帧编解码。
  *
  * @param device         串口设备结构体指针
  * @param device_path    设备文件路径（如 /dev/ttyS0）
@@ -21,11 +21,11 @@
 int app_link_adapter_init(SerialDevice *device, const char *device_path, const char *interface_name);
 
 /**
- * @brief 设备层配置：根据协议名称完成设备初始化指令序列与帧钩子绑定
+ * @brief 协议应用入口：按协议名加载配置并完成设备层绑定
  *
- * 设备层按固定流程运行：初始化（接口层已完成）→ 配置（发送 init_cmds）→ 正常工作。
- * 此函数完成"配置"阶段：从 config/protocols.ini 加载该设备的协议参数，
- * 按序发送初始化指令，并绑定收发钩子函数（postRead / preWrite）。
+ * 常规流程：接口初始化 -> 协议配置 -> 启动收发。
+ * 本函数属于“协议配置”阶段，负责协议加载、初始化命令执行与收发钩子绑定。
+ * 若 protocol_name 为空，表示该设备仅启用链路收发，不执行私有协议初始化。
  *
  * @param device         串口设备结构体指针（已由 app_link_adapter_init 初始化）
  * @param protocol_name  协议名称（对应 config/protocols.ini 中 [protocol.<name>] 节）

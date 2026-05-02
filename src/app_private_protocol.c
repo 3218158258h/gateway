@@ -20,6 +20,7 @@ static int private_protocol_placeholder_index(const AppProtocolPlaceholder *plac
     return -1;
 }
 
+/* 载入可直接运行的默认协议参数，保证最小可用。 */
 void app_private_protocol_load_defaults(PrivateProtocolConfig *config)
 {
     if (!config) {
@@ -153,6 +154,7 @@ int app_private_protocol_expand_template(const char *tmpl, char *out, size_t out
         return -1;
     }
 
+    /* 模板形如 "AT+MADDR{m_addr}\r\n"，按占位符逐段替换。 */
     out[0] = '\0';
     size_t j = 0;
     for (size_t i = 0; tmpl[i] != '\0' && j < out_len - 1; ) {
@@ -233,6 +235,7 @@ int app_private_protocol_validate_frame(const PrivateProtocolConfig *config,
     if (!config || !frame || frame_len <= 0 || config->frame_header_len <= 0 || config->id_len <= 0) {
         return -1;
     }
+    /* 数据不足以判断完整帧时返回 0，交由上层继续累积。 */
     if (frame_len < config->frame_header_len + 1) {
         return 0;
     }
@@ -268,6 +271,7 @@ int app_private_protocol_build_frame(const PrivateProtocolConfig *config,
     if (!config || !message || !frame || message_len < 3 || frame_len <= 0) {
         return -1;
     }
+    /* message 必须是内部统一格式：[type][id_len][data_len][id+data]。 */
     if (memcmp(message, &config->connection_type, 1) != 0) {
         return -1;
     }
@@ -339,6 +343,7 @@ int app_private_protocol_unpack_frame(const PrivateProtocolConfig *config,
     }
 
     int payload_len = 0;
+    /* 复用校验函数，先确认边界与头尾合法，再解包。 */
     int total_len = app_private_protocol_validate_frame(config, frame, frame_len, &payload_len);
     if (total_len <= 0) {
         return total_len;

@@ -1,289 +1,276 @@
-# Gateway README 2.0（生产级测试与优化执行手册）
+# Gateway 虚拟机测试手册
 
-
-## 1. 目标
-
-把当前网关从“可运行”推进到“可生产”，按以下固定路径执行：
-1. **基础功能正确性与完整性**（Phase A）
-2. **高并发场景性能瓶颈筛查、优化与错误恢复**（Phase B）
-3. **资源优化与长稳保障（CPU/内存/丢包/时延/7x24）**（Phase C）
-
-> 原则：先正确，再并发，再优化资源使用与长期稳定性；任何优化不得牺牲正确性。
+> 本文档用于在 Linux 虚拟机内完成网关功能测试与回归。  
+> 原则：先跑通功能闭环，再做稳定性与故障恢复测试。
 
 ---
 
-## 2. 发布门禁（Release Gate）
+## 1. 测试目标与边界
 
-只有以下 Gate 全部通过，才可进入下一阶段：
+### 1.1 可在虚拟机完成的测试
+- 构建、启动、配置加载、守护进程流程
+- UART 虚拟节点收发链路
+- MQTT/DDS 上下行逻辑链路
+- 路由封包、持久化入库、重启恢复
+- CAN `vcan` 基础链路（如虚拟机内核支持）
+- I2C/SPI stub/mock 链路（如虚拟机内核支持相关模块）
 
-### Gate-0：环境与构建闸门
-- `make` 成功
-- `make -C test` 成功
-- `scripts/debug_uart_pseudo.sh` 可创建虚拟串口
-- 依赖齐全：`MQTTClient.h`、`dds/dds.h`、`socat`
+### 1.2 不等价于真实硬件的部分
+- 真实总线电气特性与时序抖动
+- 板级驱动异常、DMA/中断行为
+- 长时间高负载下真实硬件稳定性
 
-**判定**
-- 通过：全部返回码为 0
-- 阻塞（BLOCKED）：依赖或环境缺失
-- 失败（FAIL）：代码编译错误
-
-### Gate-1：功能闸门（Phase A 结束）
-- 上下行闭环通过（MQTT/DDS 至少一种生产目标链路）
-- 送达率、重复率、乱序率、重启恢复满足阈值
-
-### Gate-2：并发闸门（Phase B 结束）
-- 高负载持续运行无崩溃
-- 目标负载下 P99、丢包率、恢复时间满足阈值
-- 队列可回落，不持续堆积
-
-### Gate-3：生产闸门（Phase C 结束）
-- 7x24 连续稳定运行通过
-- 资源指标在预算内（CPU/内存）
-- 至少一项性能收益显著，且无回归
+### 1.3 开发板 + 虚拟机半实物联调可行性
+- 方案可行：开发板运行网关，PC 虚拟机通过 USB 转 UART/I2C/SPI 模块发消息模拟下位机。
+- 推荐用途：功能联调、协议回归、异常注入。
+- 关键前提：USB-I2C/SPI 模块必须在开发板上暴露为标准设备（如 `/dev/i2c-*`、`/dev/spidev*`）。
+- 若模块只提供厂商私有协议接口而非标准设备节点，则不能直接复用本项目 I2C/SPI 链路。
 
 ---
 
-## 3. 统一指标口径（必须固定）
+## 2. 环境准备
 
-### 3.1 指标定义
-- **送达率** = 成功送达消息数 / 总发送消息数 × 100%
-- **丢包率** = (总发送 - 成功送达) / 总发送 × 100%
-- **重复率** = 重复消息数 / 成功送达消息数 × 100%
-- **乱序率** = 乱序消息数 / 成功送达消息数 × 100%
-- **恢复时间** = 故障注入到指标恢复稳定阈值内的时间
-- **稳定性故障数** = 崩溃 + 卡死 + 无响应
+## 2.1 依赖检查
+```bash
+cd <project-root>
+gcc --version
+make --version
+python3 --version
+socat -V
+```
 
-### 3.2 验收阈值（建议生产基线）
+MQTT 模式需具备 MQTT 开发库，DDS 模式需具备 Cyclone DDS 头文件与库。
 
-| 类别 | 指标 | 目标阈值 |
-| --- | --- | --- |
-| 功能正确性 | 上下行字段一致性 | 100% |
-| 功能正确性 | 端到端送达率 | >= 99.9% |
-| 功能正确性 | 重复率 | <= 0.1% |
-| 功能正确性 | 乱序率 | 单设备=0，多设备<=0.1% |
-| 时延 | P50/P95/P99 | <100ms / <300ms / <1s |
-| 弹性恢复 | 网络故障后恢复 | <= 5 分钟 |
-| 稳定性 | 8h 高压崩溃次数 | 0 |
-| 生产稳定性 | 7x24 崩溃次数 | 0 |
-| 资源 | CPU 平均 | 按部署预算（建议 <= 70%） |
-| 资源 | 内存增长斜率 | 长稳无持续线性增长（无泄漏趋势） |
-| 观测口径 | 7x24 资源采样频率 | 每 1 分钟 |
-| 观测口径 | 7x24 质量指标汇总频率 | 每 5 分钟 |
-
----
-
-## 4. Phase A：基础功能正确性与完整性（必须先通过）
-
-### A-00 环境闸门
-**测试目标**：确认测试基础设施可用。
-
-**测试方法**
+## 2.2 构建
 ```bash
 cd <project-root>
 make
 make -C test
-./scripts/debug_uart_pseudo.sh 2 /tmp/gateway-vdev
 ```
 
-**通过标志**
-- 上述命令全部成功
-- `/tmp/gateway-vdev/gw0|sim0|gw1|sim1` 存在
+如 DDS 不在默认路径：
+```bash
+make DDS_HOME=/path/to/cyclonedds/install
+```
 
 ---
 
-### A-01 启动与配置一致性
-**测试目标**：配置与编译能力严格一致，网关可稳定启动。
+## 3. 最小可运行配置（建议）
 
-**测试方法**
-1. `gateway.ini` 设置 `transport.type=mqtt`，启动观察 30 分钟。
-2. 设置 `transport.type=dds`，使用 `make`（或 `make DDS_HOME=...`）构建后启动观察 30 分钟。
+在 `config/transport_physical.ini` 的 `[device_registry]` 使用 2 个 UART 设备做起步：
 
+```ini
+[device_registry]
+device_paths = /tmp/gateway-vdev/uart-gw0,/tmp/gateway-vdev/uart-gw1
+interfaces   = serial,serial
+protocols    = ble_mesh_default,
+```
+
+说明：
+- 三个字段按顺序一一对应。
+- `protocols` 空项表示该设备跳过私有协议初始化。
+
+---
+
+## 4. 功能测试流程（建议执行顺序）
+
+## 4.1 UART 虚拟节点创建
+```bash
+cd <project-root>
+./scripts/debug_uart_pseudo.sh 2 /tmp/gateway-vdev
+```
+
+确认节点存在：
+```bash
+ls /tmp/gateway-vdev
+```
+
+## 4.2 启动网关
 ```bash
 ./build/bin/gateway app
 ```
 
-**通过标志**
-- 无初始化失败、无崩溃、无异常退出
-- 进程稳定存活
+启动通过的关键日志：
+- `[snapshot] event=startup_config`
+- `[snapshot] event=device_config`
+- `[device] event=bootstrap_summary`
+- `Router initialized`
+- `Transport initialized`
 
----
-
-### A-02 串口收发正确性（本地链路）
-**测试目标**：串口帧解析正确，异常帧不拖垮服务。
-
-**测试方法**
-1. 创建 3 对虚拟串口。
-2. 在 `config/transport_physical.ini` 的 `[device_registry].device_paths` 填入 `gw*`。
-3. 用模拟器向 `sim0` 连续发送固定 payload。
-4. 监控对应网关串口输出。
-
+## 4.3 模拟下位机上报（上行）
 ```bash
-./scripts/debug_uart_pseudo.sh 3 /tmp/gateway-vdev
-python3 scripts/simulate_lower_device.py --port /tmp/gateway-vdev/sim0 --device-id 0001 --payload 01020304 --count 1000 --interval 0.02
-./scripts/debug_uart_monitor.sh /tmp/gateway-vdev/gw0
+python3 scripts/simulate_lower_device.py \
+  --port /tmp/gateway-vdev/uart-sim0 \
+  --device-id 0001 \
+  --payload 01020304 \
+  --count 200 \
+  --interval 0.05
 ```
 
-**通过标志**
-- 有效帧识别率 100%
-- 非法帧不导致崩溃，后续帧持续可处理
-
----
-
-### A-03 MQTT 上下行闭环
-**测试目标**：云-边-端消息闭环正确。
-
-**测试方法**
-1. 配置 `transport.type=mqtt`。
-2. 设备侧持续上报；验证发布到 `publish_topic`。
-3. 云侧向 `subscribe_topic` 下发命令；验证网关下发到串口设备。
-4. 样本规模建议：1000~10000 条。
-
-**通过标志**
-- 上下行均可达
-- 字段、topic、payload 字节级一致
-- 送达率 >= 99.9%，重复率 <= 0.1%
-
----
-
-### A-04 DDS 上下行闭环
-**测试目标**：DDS 链路满足与 MQTT 同等级正确性。
-
-**测试方法**
-1. `make`（如需自定义路径：`make DDS_HOME=...`）
-2. `make -C test` 后运行 publisher/subscriber。
-3. 验证 `GatewayData/GatewayCommand` 类型与 topic 对齐。
-
-**通过标志**
-- DDS 上下行稳定闭环
-- 送达率 >= 99.9%
-- 无类型不匹配、无域冲突
-
----
-
-### A-05 持久化一致性与重启恢复
-**测试目标**：消息落库、重试、重启后恢复可证明一致。
-
-**测试方法**
-1. 运行网关并持续产生消息。
-2. 人工断开网络 30~120 秒后恢复。
-3. 重启网关，检查数据库状态。
-
+可选：模拟 AT ACK（用于协议初始化联调）
 ```bash
-python3 scripts/read_gateway_db.py --limit 100
+python3 scripts/simulate_lower_device.py \
+  --port /tmp/gateway-vdev/uart-sim0 \
+  --ack-at --count 0
 ```
 
-**通过标志**
-- `retry_count` 不超过配置上限
-- 最终一致性差异 = 0
-- 重启后 60 秒内恢复通信
+## 4.4 云端下发（下行）
+
+### DDS 模式
+```bash
+./test/publisher --device-type ble_mesh --count 100 --interval-ms 200
+```
+
+### MQTT 模式
+用你的 MQTT 客户端向 `config/transport.ini` 的 `subscribe_topic` 发送命令消息。
+
+## 4.5 开发板 + 虚拟机跨机联调流程
+
+1. 开发板侧运行网关  
+```bash
+./build/bin/gateway app
+```
+
+2. 开发板侧确认设备节点  
+```bash
+ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+ls /dev/i2c-* 2>/dev/null
+ls /dev/spidev* 2>/dev/null
+```
+
+3. 开发板侧配置 `device_registry`  
+- `device_paths` 填实际节点（如 `/dev/ttyUSB0,/dev/i2c-1,/dev/spidev0.0`）
+- `interfaces` 按顺序填 `serial,i2c,spi`
+- `protocols` 按顺序对齐，未使用私有协议位置留空
+
+4. 虚拟机侧发送模拟流量  
+- UART：用 `scripts/simulate_lower_device.py` 发送
+- I2C/SPI：用你 USB 转模块的官方工具发送事务请求/响应
+- 云侧下行：用 DDS `test/publisher` 或 MQTT 客户端发送命令
+
+5. 联调证据采集  
+- 开发板：保存网关日志（重点看 `[snapshot]`、`[device]`、`[protocol]`、`[health]`）
+- 开发板：`python3 scripts/read_gateway_db.py --limit 50`
+- 虚拟机：记录发送时间戳与报文内容用于对账
+
+6. 常见风险  
+- 虚拟机 USB 透传抖动会带来偶发超时，关键结论建议在开发板本机复测
+- USB 转 I2C/SPI 若非标准内核设备节点，I2C/SPI 测试会失效
+- 供电或线缆问题会伪造成协议故障，先排除物理层再排软件问题
 
 ---
 
-## 5. Phase B：高并发瓶颈筛查与优化（性能+恢复）
+## 5. 数据库验证
 
-### 5.1 压测模型
-1. **Ramp Up**：逐步升压（找吞吐/时延拐点）
-2. **Sustain**：固定高负载 2~8 小时
-3. **Spike**：2~5 倍瞬时突发
-4. **Soak**：24 小时预跑（正式 7x24 在 Phase C）
+```bash
+python3 scripts/read_gateway_db.py --limit 50
+```
 
-### 5.2 压测矩阵（建议）
-- 设备数：8 / 16 / 32 / 64
-- 单设备速率：1 / 5 / 10 / 20 msg/s
-- 报文大小：16B / 128B / 512B / 1KB
-- 链路扰动：正常 / 丢包 / 抖动 / 短断网
+建议重点看：
+- `device_path`
+- `interface_name`
+- `protocol_family`
+- `protocol_name`
+- `qos`
+- `status/retry_count`
 
-### 5.3 必采集项
-- 吞吐：入口/出口 msg/s
-- 质量：丢包率、重复率、乱序率
-- 时延：P50/P95/P99
-- 队列：峰值、回落时间、是否持续增长
-- 恢复：重连次数、恢复时间
-- 数据库：写入耗时 P95/P99、失败率
-
-### 5.4 故障注入与恢复验证（必须有）
-- MQTT Broker 重启
-- DDS participant 短时中断
-- 串口设备拔插/失联
-- 网络抖动、丢包、短断
-- 磁盘写入压力升高（验证持久化退化行为）
-
-**通过标志**
-- 8 小时无崩溃
-- 丢包率 <= 0.1%，重复率 <= 0.2%
-- 目标负载 P99 <= 1s
-- 故障恢复 <= 5 分钟
-- 队列可回落且无持续膨胀
-
-### 5.5 瓶颈定位路径（执行顺序）
-1. 先确认是 CPU、内存、I/O、网络还是锁竞争
-2. 再定位到模块（串口读写、路由、持久化、传输层）
-3. 单变量优化（每次只改一个点）
-4. 复跑 A-核心 + B-关键场景
-5. 若任一核心指标回退，立即回滚
+或使用 sqlite3：
+```bash
+sqlite3 <db_path_from_gateway_ini>
+```
+```sql
+SELECT id, device_path, interface_name, protocol_family, protocol_name, qos, status, retry_count
+FROM messages ORDER BY id DESC LIMIT 20;
+```
 
 ---
 
-## 6. Phase C：CPU/内存/丢包/时延/7x24 稳定性
+## 6. 虚拟机扩展测试
 
-### 6.1 资源与时延观测目标
-- CPU：平均值、峰值、热点线程
-- 内存：RSS、增长斜率、碎片化趋势
-- 丢包：分钟级与小时级统计
-- 时延：分钟窗口 P99 波动
+## 6.1 CAN（vcan）
+```bash
+./scripts/debug_can_vcan.sh 2 vcan /tmp/gateway-debug-can-map.tsv
+```
 
-### 6.2 7x24 长稳执行法
-1. 以“目标生产负载”连续运行 168 小时
-2. 采样频率按 **3.2 验收阈值** 固定执行（资源每 1 分钟、质量指标每 5 分钟）
-3. 每 4 小时做一次健康检查（进程、队列、数据库）
-4. 中途执行至少 3 类故障注入并验证自恢复
+## 6.2 I2C（stub）
+```bash
+sudo ./scripts/debug_i2c_stub.sh 10 0x50 /tmp/gateway-debug-i2c-map.tsv
+```
 
-### 6.3 7x24 通过标志
-- 7x24（168 小时）内崩溃/卡死 = 0
-- 内存无持续线性上涨（无明确泄漏趋势）
-- CPU 长期稳定在预算范围内
-- 丢包率、P99 时延持续满足阈值
-- 故障注入后均可在 SLA 时间内恢复
+## 6.3 SPI（mock）
+```bash
+sudo ./scripts/debug_spi_mock.sh spi-mockup /dev/spidev0.0 /tmp/gateway-debug-spi-map.tsv
+```
+
+说明：I2C/SPI 测试依赖虚拟机内核模块是否可用，不可用时先完成 UART + MQTT/DDS 主链路验证。
 
 ---
 
-## 7. 生产级优化闭环（建议你按此推进）
+## 7. 故障注入与恢复
 
-1. **基线冻结**：先完成 A/B/C 初次基线并归档
-2. **优先级排序**：按“正确性风险 > 稳定性风险 > 性能收益”排队
-3. **单点优化**：每次只动一个变量（线程池、队列、重试、批量写库等）
-4. **强制回归**：每次优化后至少回跑 A-核心 + B-目标负载
-5. **长稳复验**：关键优化合入前做 24h 回归，版本发布前做 7x24
-6. **发布门禁**：未满足 Gate-3 不发布
+## 7.1 网络中断恢复
+1. 运行过程中断开网络 30~120 秒。  
+2. 恢复网络后观察是否自动恢复发布/订阅。  
+3. 检查持久化是否按重试策略回放。
+
+## 7.2 进程重启恢复
+1. 运行中强制停止网关。  
+2. 重新启动后检查：
+- 设备是否重新注册
+- 传输是否重连
+- 数据库状态是否一致
+
+## 7.3 OTA 专项校验（虚拟机）
+
+目标：验证 OTA 升级流程的关键判定与失败路径是否正确。
+
+1. 版本比较校验  
+- 准备版本文件：当前版本 `1.9`，服务端版本 `1.10`。  
+- 预期：应识别为“有更新”，不能按字符串比较误判。
+
+2. 签名下载失败校验  
+- 人为将签名 URL 指向不存在路径。  
+- 预期：`ota_verify` 直接失败并返回下载/网络错误，不进入“签名通过”路径。
+
+3. boot 配置完整性校验  
+- 人为篡改 `boot.conf` 的 `checksum` 或 `version`。  
+- 预期：读取失败并回退到安全默认分区，不信任损坏配置。
+
+4. 升级检查返回码语义  
+- 模拟“无更新”和“检查失败”两种场景。  
+- 预期：无更新返回 `1`，失败返回 `-1`，日志语义清晰区分。
+
+5. 空固件保护  
+- 准备 0 字节固件文件。  
+- 预期：安装阶段直接失败，不允许进入进度计算和分区写入。
 
 ---
 
-## 8. 测试记录模板（建议固定）
+## 8. 通过标准（虚拟机场景）
 
-- 用例 ID：
-- 阶段：A / B / C
-- 测试目标：
-- 前置条件：
-- 输入参数（设备数/速率/报文大小/transport）：
+- 构建成功：`make` 与 `make -C test` 均通过
+- 启动成功：关键快照日志齐全，无初始化致命失败
+- 上行成功：模拟设备数据可进入路由并落库
+- 下行成功：测试命令可从云侧到达设备侧
+- 恢复成功：网络中断/进程重启后可自动恢复
+- 稳定性：连续运行 2 小时无崩溃、无卡死、无明显内存持续上涨
+
+### 8.1 半实物联调补充标准
+- 开发板上目标设备均完成初始化与注册
+- 虚拟机发送报文可在开发板日志与数据库中闭环对账
+- 至少完成一次链路中断恢复验证（USB重插或网络短断）
+- 关键用例在开发板本机复测通过
+
+---
+
+## 9. 测试记录模板
+
+- 测试日期：
+- 虚拟机环境（OS/内核/CPU/内存）：
+- 传输模式（MQTT/DDS）：
+- 设备配置（device_paths/interfaces/protocols）：
 - 执行命令：
-- 观测证据（日志/数据库/监控图）：
-- 指标结果（送达率、丢包率、重复率、P99、CPU、RSS）：
-- 通过标志是否满足：
-- 结论：PASS / FAIL / BLOCKED
-- 问题与优化建议：
-
----
-
-## 9. 已落地的低风险架构修复（本轮）
-
-本轮已完成：1 / 2 / 4 / 5 / 7 / 9。
-
-1. 启动配置快照：新增 `[snapshot]` 结构化日志，覆盖运行时、设备、传输配置。  
-2. 设备部分失败隔离：单设备初始化或协议配置失败不再导致全局失败。  
-4. 协议严格校验：非默认协议启用严格模式，解析/校验失败直接拒绝。  
-5. 传输健康诊断：新增 `TransportHealth` 与 `[health]` 日志，连接/发布/订阅失败可量化追踪。  
-7. 回调解耦：设备回调改为 context 传递，移除全局 `g_router` 依赖。  
-9. 日志统一：关键链路统一 `event=... key=value` 格式。
-
-详细问题、代码形态与修复方案请见根目录 `problem.md`。
-
+- 日志证据：
+- 数据库证据：
+- 结果：PASS / FAIL / BLOCKED
+- 问题与修复建议：

@@ -46,6 +46,59 @@ typedef struct {
     uint32_t checksum;           /* 校验和。 */
 } BootConfig;
 
+static uint32_t boot_config_checksum(const BootConfig *config)
+{
+    const uint8_t *p = (const uint8_t *)config;
+    uint32_t sum = 0;
+    for (size_t i = 0; i < sizeof(BootConfig) - sizeof(config->checksum); i++) {
+        sum += p[i];
+    }
+    return sum;
+}
+
+static int parse_version_part(const char **cursor, long *out_value)
+{
+    if (!cursor || !*cursor || !out_value) {
+        return -1;
+    }
+    char *endptr = NULL;
+    long value = strtol(*cursor, &endptr, 10);
+    if (endptr == *cursor) {
+        return -1;
+    }
+    *out_value = value;
+    *cursor = endptr;
+    if (**cursor == '.') {
+        (*cursor)++;
+    }
+    return 0;
+}
+
+/* 版本比较采用数字段比较，避免 "1.10" 与 "1.9" 的字典序误判。 */
+static int version_compare(const char *lhs, const char *rhs)
+{
+    if (!lhs || !rhs) {
+        return 0;
+    }
+
+    const char *lp = lhs;
+    const char *rp = rhs;
+    while (*lp != '\0' || *rp != '\0') {
+        long lv = 0;
+        long rv = 0;
+        if (*lp != '\0' && parse_version_part(&lp, &lv) != 0) {
+            return strcmp(lhs, rhs);
+        }
+        if (*rp != '\0' && parse_version_part(&rp, &rv) != 0) {
+            return strcmp(lhs, rhs);
+        }
+        if (lv != rv) {
+            return (lv > rv) ? 1 : -1;
+        }
+    }
+    return 0;
+}
+
 /* OTA 状态字符串数组，用于日志输出。 */
 static const char *state_strings[] = {
     "IDLE",        // 空闲。
@@ -210,9 +263,19 @@ static int read_boot_config(const char *path, BootConfig *config)
         return -1;
     }
     
-    // 验证魔数，确保配置文件有效。
+    // 验证魔数、版本和校验和，确保配置文件有效。
     if (config->magic != BOOT_CONFIG_MAGIC) {
         log_error("Invalid boot config magic");
+        return -1;
+    }
+    if (config->version != BOOT_CONFIG_VERSION) {
+        log_error("Invalid boot config version: %u", config->version);
+        return -1;
+    }
+    uint32_t expected = boot_config_checksum(config);
+    if (config->checksum != expected) {
+        log_error("Invalid boot config checksum: file=%u expected=%u",
+                  config->checksum, expected);
         return -1;
     }
     return 0;
@@ -227,7 +290,7 @@ static int read_boot_config(const char *path, BootConfig *config)
  */
 static int write_boot_config(const char *path, BootConfig *config)
 {
-    int fd = open(path, O_WRONLY | O_CREAT, 0644);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         log_error("Failed to open boot config for writing");
         return -1;
@@ -239,19 +302,18 @@ static int write_boot_config(const char *path, BootConfig *config)
     
     // 计算校验和（简单累加和）。
     config->checksum = 0;
-    uint8_t *p = (uint8_t *)config;
-    uint32_t sum = 0;
-    for (size_t i = 0; i < sizeof(BootConfig) - 4; i++) {
-        sum += p[i];
-    }
-    config->checksum = sum;
+    config->checksum = boot_config_checksum(config);
     
     ssize_t len = write(fd, config, sizeof(BootConfig));
-    close(fd);
-    
     if (len != sizeof(BootConfig)) {
+        close(fd);
         return -1;
     }
+    if (fsync(fd) != 0) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
     
     return 0;
 }
@@ -426,6 +488,11 @@ int ota_check_update(OtaManager *manager, char *out_version, size_t max_len)
     
     // 下载版本信息到临时文件
     FILE *fp = tmpfile(); // 创建临时文件。
+    if (!fp) {
+        curl_easy_cleanup(curl);
+        manager->state = OTA_STATE_FAILED;
+        return -1;
+    }
     curl_easy_setopt(curl, CURLOPT_URL, version_url); // 设置 URL。
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp); // 设置写入目标。
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L); // 设置超时时间 30 秒。
@@ -451,10 +518,12 @@ int ota_check_update(OtaManager *manager, char *out_version, size_t max_len)
     if (nl) *nl = '\0';
     
     // 比较版本号。
-    if (strcmp(new_version, manager->current_version) > 0) {
+    if (version_compare(new_version, manager->current_version) > 0) {
         strncpy(manager->new_version, new_version, sizeof(manager->new_version) - 1);
+        manager->new_version[sizeof(manager->new_version) - 1] = '\0';
         if (out_version && max_len > 0) {
             strncpy(out_version, new_version, max_len - 1);
+            out_version[max_len - 1] = '\0';
         }
         
         log_info("New version available: %s", new_version);
@@ -570,16 +639,36 @@ int ota_verify(OtaManager *manager)
              manager->config.firmware_url, manager->new_version);
     
     CURL *curl = curl_easy_init();
-    if (curl) {
-        FILE *fp = fopen(sig_path, "wb");
-        if (fp) {
-            curl_easy_setopt(curl, CURLOPT_URL, sig_url);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-            curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-            curl_easy_perform(curl);
-            fclose(fp);
+    if (!curl) {
+        manager->state = OTA_STATE_FAILED;
+        if (manager->on_error) {
+            manager->on_error(manager, OTA_ERR_NETWORK);
         }
+        return -1;
+    }
+    FILE *fp = fopen(sig_path, "wb");
+    if (!fp) {
         curl_easy_cleanup(curl);
+        manager->state = OTA_STATE_FAILED;
+        if (manager->on_error) {
+            manager->on_error(manager, OTA_ERR_DOWNLOAD);
+        }
+        return -1;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, sig_url);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    CURLcode sig_res = curl_easy_perform(curl);
+    fclose(fp);
+    curl_easy_cleanup(curl);
+    if (sig_res != CURLE_OK) {
+        log_error("Failed to download signature: %s", curl_easy_strerror(sig_res));
+        remove(sig_path);
+        manager->state = OTA_STATE_FAILED;
+        if (manager->on_error) {
+            manager->on_error(manager, OTA_ERR_DOWNLOAD);
+        }
+        return -1;
     }
     
     // 验证 RSA 签名。
@@ -632,6 +721,14 @@ int ota_install(OtaManager *manager)
     fseek(fp, 0, SEEK_END);
     size_t firmware_size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
+    if (firmware_size == 0) {
+        fclose(fp);
+        manager->state = OTA_STATE_FAILED;
+        if (manager->on_error) {
+            manager->on_error(manager, OTA_ERR_INVALID);
+        }
+        return -1;
+    }
     
     // 打开目标分区设备。
     int fd = open(manager->inactive_partition->device, O_WRONLY);
@@ -720,9 +817,14 @@ int ota_upgrade(OtaManager *manager)
     
     // 步骤 1：检查更新。
     char version[64];
-    if (ota_check_update(manager, version, sizeof(version)) != 0) {
+    int check_ret = ota_check_update(manager, version, sizeof(version));
+    if (check_ret == 1) {
         log_info("No update available");
         return 1;
+    }
+    if (check_ret < 0) {
+        log_error("Check update failed");
+        return -1;
     }
     
     // 步骤 2：下载固件。

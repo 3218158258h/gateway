@@ -23,12 +23,14 @@ static void print_usage(const char *program_name)
 
 int main(int argc, char const *argv[])
 {
+    /* 无子命令时直接打印帮助并退出。 */
     if (argc <= 1) // 没有命令参数
     {
         print_usage(argv[0]);
         exit(EXIT_FAILURE);
     }
 
+    /* 子命令分发：app/daemon/ota。 */
     if (strcmp(argv[1], "app") == 0) // 运行应用主流程
     {
         return app_runner_run();
@@ -50,6 +52,7 @@ int main(int argc, char const *argv[])
     }
     else
     {
+        /* 未知命令统一走错误提示，避免静默忽略。 */
         fprintf(stderr, "Unknown command: %s\n", argv[1]);
         print_usage(argv[0]);
         return EXIT_FAILURE;

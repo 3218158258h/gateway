@@ -19,7 +19,7 @@ static volatile sig_atomic_t is_running = 1;
 static int restart_enabled[2] = {1, 1};
 static DaemonConfig g_daemon_cfg;
 
-/* 崩溃计数状态。 */
+/* 崩溃窗口状态：用于熔断与退避。 */
 static int crash_count = 0;
 static time_t last_crash_time = 0;
 static time_t restart_block_until = 0;
@@ -73,6 +73,7 @@ static int redirect_stdio(const char *log_file)
 
 static void update_crash_window(time_t now)
 {
+    /* 超过重置窗口后清零，避免历史崩溃永久影响重启策略。 */
     if (last_crash_time > 0 &&
         (now - last_crash_time) > g_daemon_cfg.crash_count_reset_interval_sec) {
         crash_count = 0;
@@ -100,6 +101,7 @@ static void write_error_marker(void)
 
 static int check_restart_allowed(time_t now)
 {
+    /* 熔断窗口内直接拒绝重启请求。 */
     update_crash_window(now);
     if (restart_block_until > now) {
         return 0;
@@ -113,6 +115,7 @@ static int check_restart_allowed(time_t now)
 
 static int compute_backoff_ms(void)
 {
+    /* 指数退避：崩溃越密集，重启间隔越长，直到上限。 */
     if (crash_count <= 0 || g_daemon_cfg.restart_backoff_ms <= 0) {
         return 0;
     }
@@ -130,6 +133,7 @@ static int compute_backoff_ms(void)
 
 static void note_abnormal_exit(time_t now)
 {
+    /* 记录异常退出并在超阈值时进入熔断。 */
     crash_count++;
     last_crash_time = now;
     if (crash_count > g_daemon_cfg.max_crash_count) {
@@ -150,6 +154,7 @@ static int start_subprocess_at(int index, int is_retry)
         return -1;
     }
 
+    /* 重试启动路径应用退避，首次启动不延迟。 */
     int backoff_ms = is_retry ? compute_backoff_ms() : 0;
     if (backoff_ms > 0) {
         sleep_ms(backoff_ms);
@@ -187,6 +192,7 @@ static void handle_child_exit(pid_t pid, int status)
 
     subprocess[index].pid = -1;
 
+    /* 正常退出是否重启由 daemon.ini 显式控制。 */
     if (normal_exit) {
         log_info("Subprocess %s (pid=%d) exited normally", name, pid);
         if (!g_daemon_cfg.restart_on_normal_exit) {
@@ -251,6 +257,12 @@ int daemon_runner_run()
         log_warn("Initial start failed for ota subprocess");
     }
 
+    /*
+     * 主循环职责：
+     * 1) 回收已退出子进程；
+     * 2) 按策略拉起未运行子进程；
+     * 3) 空闲时按 monitor_interval 休眠。
+     */
     while (is_running) {
         int status = 0;
         pid_t pid = 0;
